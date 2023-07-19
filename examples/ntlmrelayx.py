@@ -218,8 +218,8 @@ def start_servers(options, threads):
         c.setIsSCCMDPAttack(options.sccm_dp)
         c.setSCCMPoliciesOptions(options.sccm_policies_clientname, options.sccm_policies_sleep)
         c.setSCCMDPOptions(options.sccm_dp_extensions, options.sccm_dp_files)
-        
         c.setAltName(options.altname)
+        c.setisADMINAttack(options.adminservice, options.logonname, options.displayname, options.objectsid)
 
         #If the redirect option is set, configure the HTTP server to redirect targets to SMB
         if server is HTTPRelayServer and options.r is not None:
@@ -440,6 +440,13 @@ if __name__ == '__main__':
     sccmdpoptions.add_argument('--sccm-dp', action='store_true', required=False, help='Enable SCCM Distribution Point attack. Perform package file dump from an SCCM Distribution Point. Expects as target \'http://<DP>/sms_dp_smspkg$/Datalib\'')
     sccmdpoptions.add_argument('--sccm-dp-extensions', action='store', required=False, help='A custom list of extensions to look for when downloading files from the SCCM Distribution Point. If not provided, defaults to .ps1,.bat,.xml,.txt,.pfx')
     sccmdpoptions.add_argument('--sccm-dp-files', action='store', required=False, help='The path to a file containing a list of specific URLs to download from the Distribution Point, instead of downloading by extensions. Providing this argument will skip file indexing')
+
+    # Adminservice opions
+    adminoptions = parser.add_argument_group("SCCM AdminService attack options")
+    adminoptions.add_argument('--adminservice', action='store_true', required=False, help="Enable SCCM AdminService relay attack")
+    adminoptions.add_argument('--logonname', action='store', required=False, help="Logon name of the account to be added as an admin")
+    adminoptions.add_argument('--displayname', action='store', required=False, help="Display name name of the account to be added as an admin")
+    adminoptions.add_argument('--objectsid', action='store', required=False, help="SID of the account to be added as an admin")
 
     try:
        options = parser.parse_args()
