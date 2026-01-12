@@ -538,6 +538,14 @@ class SMBRelayClient(ProtocolClient):
             authMessage.fromString(authenticateMessageBlob)
             LOG.debug('[SMB] sendAuth: Successfully parsed NTLM message')
 
+            # Log the username and domain being authenticated
+            try:
+                username = authMessage['user_name'].decode('utf-16le') if authMessage['user_name'] else ''
+                domain = authMessage['domain_name'].decode('utf-16le') if authMessage['domain_name'] else ''
+                LOG.debug('[SMB] sendAuth: Authenticating as user: "%s", domain: "%s"' % (username, domain))
+            except:
+                LOG.debug('[SMB] sendAuth: Could not decode username/domain')
+
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
@@ -617,6 +625,13 @@ class SMBRelayClient(ProtocolClient):
         if signingKey:
             logging.info("Enabling session signing")
             self.session._SMBConnection.set_session_key(signingKey)
+        else:
+            LOG.debug('[SMB] sendAuth: No signing key available, session will operate without signing')
+            # For --remove-mic-partial with empty session key, explicitly set empty key
+            # This tells the SMB library not to attempt signing
+            if self.serverConfig.remove_mic_partial:
+                LOG.debug('[SMB] sendAuth: Setting empty session key for --remove-mic-partial mode')
+                self.session._SMBConnection.set_session_key(b'')
 
         return token, errorCode
 
