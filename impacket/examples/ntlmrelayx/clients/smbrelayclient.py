@@ -404,14 +404,15 @@ class SMBRelayClient(ProtocolClient):
 
                 # Add TARGET_NAME as "cifs/localhost" to signal local authentication
                 # This is what Windows uses for local loopback connections
+                # Note: AV_PAIRS.__setitem__ automatically wraps value with (len, value)
                 target_name = 'cifs/localhost'.encode('utf-16le')
-                av_pairs[NTLMSSP_AV_TARGET_NAME] = (len(target_name), target_name)
+                av_pairs[NTLMSSP_AV_TARGET_NAME] = target_name
                 LOG.debug('[SMB] sendNegotiate: Modified challenge - added TARGET_NAME = "cifs/localhost"')
 
                 # Optionally add AV_FLAGS with MIC present flag (0x00000002)
                 # This signals that MIC is expected in the response
-                av_flags = (4, (0x00000002).to_bytes(4, byteorder='little'))
-                av_pairs[NTLMSSP_AV_FLAGS] = av_flags
+                av_flags_value = (0x00000002).to_bytes(4, byteorder='little')
+                av_pairs[NTLMSSP_AV_FLAGS] = av_flags_value
                 LOG.debug('[SMB] sendNegotiate: Modified challenge - added AV_FLAGS = 0x00000002 (MIC present)')
 
                 # Update the challenge with modified AV_PAIRS
