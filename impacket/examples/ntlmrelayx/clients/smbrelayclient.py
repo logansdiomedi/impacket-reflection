@@ -539,9 +539,11 @@ class SMBRelayClient(ProtocolClient):
         #    authData = respToken['ResponseToken']
         #else:
         authData = authenticateMessageBlob
+        LOG.debug('[SMB] sendAuth: authData prepared, length: %d' % len(authData))
 
         signingKey = None
         if self.serverConfig.remove_target:
+            LOG.debug('[SMB] sendAuth: Using --remove-target, calculating signing key')
             # Trying to exploit CVE-2019-1019
             # Discovery and Implementation by @simakov_marina and @YaronZi
             # respToken2 = SPNEGO_NegTokenResp(authData)
