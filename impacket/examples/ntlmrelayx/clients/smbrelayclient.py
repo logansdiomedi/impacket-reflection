@@ -517,8 +517,11 @@ class SMBRelayClient(ProtocolClient):
         # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendAuth: Applying --remove-mic-partial transformations')
+            LOG.debug('[SMB] sendAuth: authenticateMessageBlob length: %d, first byte: 0x%x' % (len(authenticateMessageBlob), authenticateMessageBlob[0]))
             authMessage = NTLMAuthChallengeResponse()
+            LOG.debug('[SMB] sendAuth: Created NTLMAuthChallengeResponse object, about to parse')
             authMessage.fromString(authenticateMessageBlob)
+            LOG.debug('[SMB] sendAuth: Successfully parsed NTLM message')
 
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
