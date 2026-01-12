@@ -548,13 +548,24 @@ class SMBRelayClient(ProtocolClient):
 
             LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact' % authMessage['flags'])
 
-            # Extract the encrypted session key from the NTLM message
-            # For local SYSTEM auth, we can use this directly as the signing key
-            if authMessage['session_key']:
+            # Try to extract/derive session key for SMB operations
+            # Log what we have to work with
+            LOG.debug('[SMB] sendAuth: NTLMv2 response length: %d' % (len(authMessage['ntlm']) if authMessage['ntlm'] else 0))
+            LOG.debug('[SMB] sendAuth: LM response length: %d' % (len(authMessage['lanman']) if authMessage['lanman'] else 0))
+            LOG.debug('[SMB] sendAuth: Encrypted session key length: %d' % (len(authMessage['session_key']) if authMessage['session_key'] else 0))
+
+            # For local SYSTEM auth, try using the encrypted session key directly if available
+            # Otherwise we may need to derive it differently or accept we can't sign
+            if authMessage['session_key'] and len(authMessage['session_key']) > 0:
                 signingKey = authMessage['session_key']
-                LOG.debug('[SMB] sendAuth: Extracted session key from NTLM message, length: %d' % len(signingKey))
+                LOG.debug('[SMB] sendAuth: Using encrypted session key from NTLM message, length: %d' % len(signingKey))
+            elif authMessage['ntlm'] and len(authMessage['ntlm']) >= 16:
+                # Try using the first 16 bytes of the NTLMv2 response as session key
+                # This is a heuristic for local auth scenarios
+                signingKey = authMessage['ntlm'][:16]
+                LOG.debug('[SMB] sendAuth: Attempting to use NTLMv2 response as session key, length: %d' % len(signingKey))
             else:
-                LOG.debug('[SMB] sendAuth: No session key in NTLM message')
+                LOG.debug('[SMB] sendAuth: No usable session key material found')
                 signingKey = None
 
             authenticateMessageBlob = authMessage.getData()
