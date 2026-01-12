@@ -66,7 +66,7 @@ class MYSMB3(SMB3):
         self._Connection['ClientSecurityMode'] = 0
 
         if self.RequireMessageSigning is True:
-            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
+            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
             return
 
         self._Connection['Capabilities'] = SMB2_GLOBAL_CAP_ENCRYPTION
@@ -107,7 +107,7 @@ class MYSMB3(SMB3):
         self._Connection['GSSNegotiateToken'] = negResp['Buffer']
         self._Connection['Dialect']           = negResp['DialectRevision']
         if (negResp['SecurityMode'] & SMB2_NEGOTIATE_SIGNING_REQUIRED) == SMB2_NEGOTIATE_SIGNING_REQUIRED:
-            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
+            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
             return
         if (negResp['Capabilities'] & SMB2_GLOBAL_CAP_LEASING) == SMB2_GLOBAL_CAP_LEASING:
             self._Connection['SupportsFileLeasing'] = True
