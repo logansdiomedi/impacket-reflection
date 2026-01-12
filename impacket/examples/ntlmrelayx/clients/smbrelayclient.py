@@ -358,6 +358,44 @@ class SMBRelayClient(ProtocolClient):
         self.sessionData['CHALLENGE_MESSAGE'] = challenge
         self.serverChallenge = challenge['challenge']
 
+        # Log challenge details and AV_PAIRS for analysis
+        LOG.debug('[SMB] sendNegotiate: Challenge flags: 0x%x' % challenge['flags'])
+        if challenge['TargetInfoFields']:
+            try:
+                from impacket.ntlm import AV_PAIRS, NTLMSSP_AV_EOL, NTLMSSP_AV_HOSTNAME, NTLMSSP_AV_DOMAINNAME, \
+                    NTLMSSP_AV_DNS_HOSTNAME, NTLMSSP_AV_DNS_DOMAINNAME, NTLMSSP_AV_FLAGS, NTLMSSP_AV_TIME, \
+                    NTLMSSP_AV_TARGET_NAME, NTLMSSP_AV_CHANNEL_BINDINGS
+                av_pairs = AV_PAIRS(challenge['TargetInfoFields'])
+                LOG.debug('[SMB] sendNegotiate: Challenge contains AV_PAIRS:')
+                av_names = {
+                    NTLMSSP_AV_HOSTNAME: 'HOSTNAME',
+                    NTLMSSP_AV_DOMAINNAME: 'DOMAINNAME',
+                    NTLMSSP_AV_DNS_HOSTNAME: 'DNS_HOSTNAME',
+                    NTLMSSP_AV_DNS_DOMAINNAME: 'DNS_DOMAINNAME',
+                    NTLMSSP_AV_FLAGS: 'FLAGS',
+                    NTLMSSP_AV_TIME: 'TIMESTAMP',
+                    NTLMSSP_AV_TARGET_NAME: 'TARGET_NAME',
+                    NTLMSSP_AV_CHANNEL_BINDINGS: 'CHANNEL_BINDINGS',
+                }
+                for key in av_pairs.fields:
+                    name = av_names.get(key, 'UNKNOWN_0x%02x' % key)
+                    value = av_pairs[key]
+                    if key == NTLMSSP_AV_FLAGS and value:
+                        # Decode flags value
+                        flags_val = int.from_bytes(value[1], byteorder='little') if len(value) > 1 else 0
+                        LOG.debug('[SMB] sendNegotiate:   %s = 0x%08x' % (name, flags_val))
+                    elif key in [NTLMSSP_AV_HOSTNAME, NTLMSSP_AV_DOMAINNAME, NTLMSSP_AV_DNS_HOSTNAME,
+                                 NTLMSSP_AV_DNS_DOMAINNAME, NTLMSSP_AV_TARGET_NAME]:
+                        try:
+                            text = value[1].decode('utf-16le') if len(value) > 1 else ''
+                            LOG.debug('[SMB] sendNegotiate:   %s = "%s"' % (name, text))
+                        except:
+                            LOG.debug('[SMB] sendNegotiate:   %s = %r' % (name, value))
+                    else:
+                        LOG.debug('[SMB] sendNegotiate:   %s = %r' % (name, value))
+            except Exception as e:
+                LOG.debug('[SMB] sendNegotiate: Could not parse challenge AV_PAIRS: %s' % str(e))
+
         LOG.debug('[SMB] sendNegotiate: Received challenge from server, returning to relay')
         return challenge
 
@@ -565,6 +603,24 @@ class SMBRelayClient(ProtocolClient):
             LOG.debug('[SMB] sendAuth: NTLMv2 response length: %d' % (len(authMessage['ntlm']) if authMessage['ntlm'] else 0))
             LOG.debug('[SMB] sendAuth: LM response length: %d' % (len(authMessage['lanman']) if authMessage['lanman'] else 0))
             LOG.debug('[SMB] sendAuth: Encrypted session key length: %d' % (len(authMessage['session_key']) if authMessage['session_key'] else 0))
+
+            # Log AV_PAIRS if present in NTLMv2 response
+            # NTLMv2 response format: HMAC(16 bytes) + blob (variable)
+            # Blob format: signature(4) + reserved(4) + timestamp(8) + challenge(8) + reserved(4) + av_pairs + reserved(4)
+            if authMessage['ntlm'] and len(authMessage['ntlm']) > 32:
+                try:
+                    from impacket.ntlm import AV_PAIRS
+                    # Skip HMAC (16 bytes) + signature (4) + reserved (4) + timestamp (8) + challenge (8) + reserved (4) = 44 bytes
+                    av_pairs_data = authMessage['ntlm'][44:]
+                    # Find the end of AV_PAIRS (marked by type 0x0000)
+                    av_pairs = AV_PAIRS(av_pairs_data)
+                    LOG.debug('[SMB] sendAuth: AV_PAIRS found in NTLMv2 response:')
+                    for key in av_pairs.fields:
+                        LOG.debug('[SMB] sendAuth:   AV_PAIR type 0x%02x: %r' % (key, av_pairs[key]))
+                except Exception as e:
+                    LOG.debug('[SMB] sendAuth: Could not parse AV_PAIRS: %s' % str(e))
+            else:
+                LOG.debug('[SMB] sendAuth: NTLMv2 response too short or missing, no AV_PAIRS to parse')
 
             # For local SYSTEM auth, try using the encrypted session key directly if available
             # Otherwise we may need to derive it differently or accept we can't sign
