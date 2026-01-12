@@ -536,6 +536,14 @@ class SMBRelayClient(ProtocolClient):
             authMessage.fromString(authenticateMessageBlob)
             LOG.debug('[SMB] sendAuth: Successfully parsed NTLM message')
 
+            # Debug: Show username/domain from NTLM message
+            try:
+                username = authMessage['user_name'].decode('utf-16le') if authMessage['user_name'] else ''
+                domain = authMessage['domain_name'].decode('utf-16le') if authMessage['domain_name'] else ''
+                LOG.debug('[SMB] sendAuth: NTLM message contains: domain=%s, user=%s' % (domain, username))
+            except:
+                LOG.debug('[SMB] sendAuth: Could not decode username/domain from NTLM message')
+
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
