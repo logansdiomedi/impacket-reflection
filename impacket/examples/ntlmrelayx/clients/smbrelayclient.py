@@ -800,6 +800,12 @@ class SMBRelayClient(ProtocolClient):
             if self.serverConfig.remove_mic_partial:
                 LOG.debug('[SMB] sendAuth: Setting empty session key for --remove-mic-partial mode')
                 self.session._SMBConnection.set_session_key(b'')
+                # Also explicitly disable signing requirement on the connection
+                try:
+                    self.session._SMBConnection._Connection['RequireMessageSigning'] = False
+                    LOG.debug('[SMB] sendAuth: Disabled RequireMessageSigning on connection')
+                except Exception as e:
+                    LOG.debug('[SMB] sendAuth: Could not disable RequireMessageSigning: %s' % str(e))
 
         return token, errorCode
 
