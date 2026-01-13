@@ -795,11 +795,15 @@ class SMBRelayClient(ProtocolClient):
             self.session._SMBConnection.set_session_key(signingKey)
         else:
             LOG.debug('[SMB] sendAuth: No signing key available, session will operate without signing')
-            # For --remove-mic-partial with empty session key, explicitly set empty key
-            # This tells the SMB library not to attempt signing
+            # For --remove-mic-partial with NON_NT_SESSION_KEY flag, calculate predictable session key
             if self.serverConfig.remove_mic_partial:
-                LOG.debug('[SMB] sendAuth: Setting empty session key for --remove-mic-partial mode')
-                self.session._SMBConnection.set_session_key(b'')
+                # With NTLMSSP_REQUEST_NON_NT_SESSION_KEY and empty credentials (LOCAL_CALL),
+                # the session key is: LMOWFv1('', '')[:8] + b'\x00'*8
+                from impacket.ntlm import LMOWFv1
+                calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
+                LOG.debug('[SMB] sendAuth: Calculated session key for NON_NT_SESSION_KEY with empty credentials: %s' % calculated_key.hex())
+                self.session._SMBConnection.set_session_key(calculated_key)
+
                 # Also explicitly disable signing requirement on the connection
                 try:
                     self.session._SMBConnection._Connection['RequireMessageSigning'] = False
