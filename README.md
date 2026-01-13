@@ -1,3 +1,5 @@
+Implements the "partial MIC removal" @decoder-it hints at in https://decoder.cloud/2025/11/24/reflecting-your-authentication-when-windows-ends-up-talking-to-itself/ succesfully!
+
 <img width="2043" height="571" alt="Impacket_light" src="https://github.com/user-attachments/assets/14aed700-0c6e-4865-ac53-686b91874f50" />
 
 Impacket
