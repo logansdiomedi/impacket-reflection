@@ -98,11 +98,6 @@ class NTLMRelayxConfig:
 
         # AD CS attack options
         self.isADCSAttack = False
-
-        # Session key cache for --remove-mic-partial cross-protocol relay
-        # Stores session keys from successful LDAP/RPC relay to reuse for SMB relay
-        # Key format: "username@targethost" -> session_key bytes
-        self.session_key_cache = {}
         self.template = None
         self.altName = None
 

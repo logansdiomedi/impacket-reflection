@@ -138,7 +138,6 @@ class LDAPRelayClient(ProtocolClient):
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-            # Do NOT remove SEAL flag for LDAP - keep it
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
             token = authMessage.getData()
