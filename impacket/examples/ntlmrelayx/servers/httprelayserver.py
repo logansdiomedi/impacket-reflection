@@ -562,6 +562,19 @@ class HTTPRelayServer(Thread):
                     self.client.setClientId()
                     LOG.info("Authenticating against %s://%s as %s" % (self.target.scheme, self.target.netloc, self.authUser))
                     self.do_attack()
+
+                    # Send a response to keep the client happy and prevent hanging
+                    # For PROPFIND, send 207 Multi-Status; otherwise send 200 OK
+                    if self.command == "PROPFIND":
+                        propfind_content = b"""<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"><D:response><D:href>http://webdavrelay/file/</D:href><D:propstat><D:prop><D:creationdate>2016-11-12T22:00:22Z</D:creationdate><D:displayname>a</D:displayname><D:getcontentlength></D:getcontentlength><D:getcontenttype></D:getcontenttype><D:getetag></D:getetag><D:getlastmodified>Mon, 20 Mar 2017 00:00:22 GMT</D:getlastmodified><D:resourcetype><D:collection></D:collection></D:resourcetype><D:supportedlock></D:supportedlock><D:ishidden>0</D:ishidden></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>"""
+                        self.send_multi_status(propfind_content)
+                    else:
+                        # Send 200 OK for other requests
+                        self.send_response(200)
+                        self.send_header('Content-type', 'text/html')
+                        self.send_header('Content-Length', '0')
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
                     return
 
                 LOG.info("(HTTP): Calling do_ntlm_auth for %s" % self.authUser)
