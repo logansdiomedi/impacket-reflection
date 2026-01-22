@@ -46,6 +46,7 @@ class NTLMRelayxConfig:
         self.ipv6 = False
         self.remove_mic = False
         self.remove_mic_partial = False
+        self.try_local = False
         self.disableMulti = False
         self.keepRelaying = False
 
@@ -255,6 +256,9 @@ class NTLMRelayxConfig:
 
     def setSpoofTargetName(self, spoof_target_name):
         self.spoof_target_name = spoof_target_name
+
+    def setTryLocal(self, try_local):
+        self.try_local = try_local
 
     def setWebDAVOptions(self, serve_image):
         self.serve_image = serve_image

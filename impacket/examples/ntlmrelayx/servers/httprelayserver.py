@@ -370,11 +370,26 @@ class HTTPRelayServer(Thread):
                 challengeMessage = ntlm.NTLMAuthChallenge()
                 challengeMessage['flags'] = ansFlags
                 LOG.info("(HTTP): Type 2 CHALLENGE sending with flags: %s" % hex(ansFlags))
-                challengeMessage['domain_name'] = ""
+
+                # When --try-local is enabled, construct proper Type 2 challenge to trigger HTTP local auth
+                if self.server.config.try_local:
+                    LOG.info("(HTTP): --try-local enabled, constructing proper Type 2 challenge for local auth")
+                    # Set proper TargetName (server name)
+                    challengeMessage['domain_name'] = 'WEBDAV-SERVER'
+                    # Construct proper AV_PAIRS with NetBIOS computer name and domain name
+                    av_pairs = ntlm.AV_PAIRS()
+                    av_pairs[ntlm.NTLMSSP_AV_HOSTNAME] = 'WEBDAV-SERVER'.encode('utf-16le')
+                    av_pairs[ntlm.NTLMSSP_AV_DOMAINNAME] = 'WORKGROUP'.encode('utf-16le')
+                    challengeMessage['TargetInfoFields'] = av_pairs
+                    challengeMessage['TargetInfoFields_len'] = len(av_pairs.getData())
+                    challengeMessage['TargetInfoFields_max_len'] = len(av_pairs.getData())
+                else:
+                    challengeMessage['domain_name'] = ""
+                    challengeMessage['TargetInfoFields'] = ntlm.AV_PAIRS()
+                    challengeMessage['TargetInfoFields_len'] = 0
+                    challengeMessage['TargetInfoFields_max_len'] = 0
+
                 challengeMessage['challenge'] = ''.join(random.choice(string.printable) for _ in range(64))
-                challengeMessage['TargetInfoFields'] = ntlm.AV_PAIRS()
-                challengeMessage['TargetInfoFields_len'] = 0
-                challengeMessage['TargetInfoFields_max_len'] = 0
                 challengeMessage['TargetInfoFields_offset'] = 40 + 16
                 challengeMessage['Version'] = b'\xff' * 8
                 challengeMessage['VersionLen'] = 8
