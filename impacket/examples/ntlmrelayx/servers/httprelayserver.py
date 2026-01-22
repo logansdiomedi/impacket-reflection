@@ -194,12 +194,17 @@ class HTTPRelayServer(Thread):
 
             token, messageType = self.strip_blob(proxy)
 
+            LOG.info('(HTTP): PROPFIND relayToHost=%s, disableMulti=%s, isADMINAttack=%s, messageType=%s' %
+                    (self.relayToHost, self.server.config.disableMulti, self.server.config.isADMINAttack, messageType))
+
             # Should we relay or log-in locally?
             if self.relayToHost is False and not self.server.config.disableMulti:
+                LOG.info('(HTTP): Taking do_local_auth path')
                 self.do_local_auth(messageType, token, proxy)
                 return
             else:
                 # We can start the relay process
+                LOG.info('(HTTP): Taking do_relay path')
                 self.do_relay(messageType, token, proxy, content)
 
         def do_AUTHHEAD(self, message = b'', proxy=False):
@@ -343,6 +348,7 @@ class HTTPRelayServer(Thread):
             return False
 
         def do_local_auth(self, messageType, token, proxy):
+            LOG.info("(HTTP): do_local_auth called, messageType=%s, isADMINAttack=%s" % (messageType, self.server.config.isADMINAttack))
             if messageType == 1:
                 negotiateMessage = ntlm.NTLMAuthNegotiate()
                 negotiateMessage.fromString(token)
