@@ -393,6 +393,7 @@ class HTTPRelayServer(Thread):
                 self.do_REDIRECT()
 
         def do_relay(self, messageType, token, proxy, content = None):
+            LOG.info("(HTTP): do_relay called with messageType=%d from %s" % (messageType, self.client_address[0]))
             if messageType == 1:
                 if self.server.config.disableMulti:
                     self.target = self.server.config.target.getTarget(multiRelay=False)
@@ -441,9 +442,15 @@ class HTTPRelayServer(Thread):
 
             elif messageType == 3:
                 LOG.info("(HTTP): Received AUTHENTICATE message from %s" % self.client_address[0])
-                authenticateMessage = ntlm.NTLMAuthChallengeResponse()
-                authenticateMessage.fromString(token)
-                LOG.info("(HTTP): Parsed authenticate message, user: %s" % authenticateMessage['user_name'])
+                try:
+                    authenticateMessage = ntlm.NTLMAuthChallengeResponse()
+                    authenticateMessage.fromString(token)
+                    LOG.info("(HTTP): Parsed authenticate message, user: %s" % authenticateMessage['user_name'])
+                except Exception as e:
+                    LOG.error("(HTTP): Exception parsing AUTHENTICATE message: %s" % str(e))
+                    LOG.debug("(HTTP): Exception details:", exc_info=True)
+                    self.send_not_found()
+                    return
 
                 if self.server.config.disableMulti:
                     self.authUser = authenticateMessage.getUserString()
