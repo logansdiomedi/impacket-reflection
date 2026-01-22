@@ -246,6 +246,9 @@ class NTLMRelayxConfig:
         self.remove_target = remove_target
         self.remove_mic_partial = remove_mic_partial
 
+    def setSpoofTargetName(self, spoof_target_name):
+        self.spoof_target_name = spoof_target_name
+
     def setWebDAVOptions(self, serve_image):
         self.serve_image = serve_image
 

@@ -207,6 +207,7 @@ def start_servers(options, threads):
         c.setSMBRPCAttack(options.rpc_attack)
         c.setInterfaceIp(options.interface_ip)
         c.setExploitOptions(options.remove_mic, options.remove_target, options.remove_mic_partial)
+        c.setSpoofTargetName(options.spoof_target_name)
         c.setWebDAVOptions(options.serve_image)
         c.setIsADCSAttack(options.adcs)
         c.setADCSOptions(options.template)
@@ -342,6 +343,7 @@ if __name__ == '__main__':
     parser.add_argument('-6','--ipv6', action='store_true',help='Listen on IPv6')
     parser.add_argument('--remove-mic', action='store_true',help='Remove MIC (exploit CVE-2019-1040)')
     parser.add_argument('--remove-mic-partial', action='store_true',help='Remove SIGN/SEAL flags but keep MIC intact for LDAP relay (bypasses NTLM local auth validation)')
+    parser.add_argument('--spoof-target-name', action='store', metavar='SPN', default=None, help='Spoof TargetName in NTLM challenge to bypass CVE-2016-3225 (e.g., "cifs/127.0.0.1" for HTTP->SMB relay)')
     parser.add_argument('--serve-image', action='store',help='local path of the image that will we returned to clients')
     parser.add_argument('-c', action='store', type=str, required=False, metavar = 'COMMAND', help='Command to execute on '
                         'target system (for SMB and RPC). If not specified for SMB, hashes will be dumped (secretsdump.py must be'
