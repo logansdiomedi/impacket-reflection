@@ -194,8 +194,9 @@ class HTTPRelayServer(Thread):
 
             token, messageType = self.strip_blob(proxy)
 
-            LOG.info('(HTTP): PROPFIND relayToHost=%s, disableMulti=%s, isADMINAttack=%s, messageType=%s' %
-                    (self.relayToHost, self.server.config.disableMulti, self.server.config.isADMINAttack, messageType))
+            host_header = self.headers.get('Host', 'N/A')
+            LOG.info('(HTTP): PROPFIND Host=%s, relayToHost=%s, disableMulti=%s, isADMINAttack=%s, messageType=%s' %
+                    (host_header, self.relayToHost, self.server.config.disableMulti, self.server.config.isADMINAttack, messageType))
 
             # Should we relay or log-in locally?
             if self.relayToHost is False and not self.server.config.disableMulti:
@@ -258,7 +259,8 @@ class HTTPRelayServer(Thread):
                 self.do_SMBREDIRECT()
                 return
 
-            LOG.info('(HTTP): Client requested path: %s' % self.path.lower())
+            host_header = self.headers.get('Host', 'N/A')
+            LOG.info('(HTTP): GET request - Host=%s, Path=%s' % (host_header, self.path.lower()))
 
             # Serve WPAD if:
             # - The client requests it
