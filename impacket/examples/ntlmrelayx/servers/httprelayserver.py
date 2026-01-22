@@ -356,6 +356,8 @@ class HTTPRelayServer(Thread):
                     ansFlags |= ntlm.NTLMSSP_NEGOTIATE_KEY_EXCH
                 if negotiateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY:
                     ansFlags |= ntlm.NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+                if negotiateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_SIGN:
+                    ansFlags |= ntlm.NTLMSSP_NEGOTIATE_SIGN
                 if negotiateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_UNICODE:
                     ansFlags |= ntlm.NTLMSSP_NEGOTIATE_UNICODE
                 if negotiateMessage['flags'] & ntlm.NTLM_NEGOTIATE_OEM:
