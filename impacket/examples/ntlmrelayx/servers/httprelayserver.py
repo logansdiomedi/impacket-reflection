@@ -318,16 +318,22 @@ class HTTPRelayServer(Thread):
             return True
 
         def do_ntlm_auth(self,token,authenticateMessage):
+            LOG.info("(HTTP): do_ntlm_auth - user_name='%s', target=%s" % (authenticateMessage['user_name'], self.target.hostname))
             if authenticateMessage['user_name'] != '' or self.target.hostname == '127.0.0.1':
+                LOG.info("(HTTP): Calling client.sendAuth with token")
                 clientResponse, errorCode = self.client.sendAuth(token)
+                LOG.info("(HTTP): sendAuth returned errorCode: 0x%x" % errorCode)
             else:
                 # Anonymous login, send STATUS_ACCESS_DENIED so we force the client to send his credentials, except
                 # when coming from localhost
+                LOG.info("(HTTP): Anonymous login detected, returning STATUS_ACCESS_DENIED")
                 errorCode = STATUS_ACCESS_DENIED
 
             if errorCode == STATUS_SUCCESS:
+                LOG.info("(HTTP): Auth succeeded!")
                 return True
 
+            LOG.info("(HTTP): Auth failed with errorCode: 0x%x" % errorCode)
             return False
 
         def do_local_auth(self, messageType, token, proxy):
@@ -434,13 +440,16 @@ class HTTPRelayServer(Thread):
                         self.do_REDIRECT()
 
             elif messageType == 3:
+                LOG.info("(HTTP): Received AUTHENTICATE message from %s" % self.client_address[0])
                 authenticateMessage = ntlm.NTLMAuthChallengeResponse()
                 authenticateMessage.fromString(token)
+                LOG.info("(HTTP): Parsed authenticate message, user: %s" % authenticateMessage['user_name'])
 
                 if self.server.config.disableMulti:
                     self.authUser = authenticateMessage.getUserString()
                     target = '%s://%s@%s' % (self.target.scheme, self.authUser.replace("/", '\\'), self.target.netloc)
 
+                LOG.info("(HTTP): Calling do_ntlm_auth for %s" % self.authUser)
                 if not self.do_ntlm_auth(token, authenticateMessage):
                     LOG.error("(HTTP): Authenticating against %s://%s as %s FAILED" % (self.target.scheme, self.target.netloc, self.authUser))
                     if self.server.config.disableMulti:
