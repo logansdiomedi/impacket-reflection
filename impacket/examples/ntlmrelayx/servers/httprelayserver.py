@@ -346,6 +346,7 @@ class HTTPRelayServer(Thread):
             if messageType == 1:
                 negotiateMessage = ntlm.NTLMAuthNegotiate()
                 negotiateMessage.fromString(token)
+                LOG.info("(HTTP): Type 1 NEGOTIATE received with flags: %s" % hex(negotiateMessage['flags']))
                 ansFlags = 0
 
                 if negotiateMessage['flags'] & ntlm.NTLMSSP_NEGOTIATE_56:
@@ -368,6 +369,7 @@ class HTTPRelayServer(Thread):
 
                 challengeMessage = ntlm.NTLMAuthChallenge()
                 challengeMessage['flags'] = ansFlags
+                LOG.info("(HTTP): Type 2 CHALLENGE sending with flags: %s" % hex(ansFlags))
                 challengeMessage['domain_name'] = ""
                 challengeMessage['challenge'] = ''.join(random.choice(string.printable) for _ in range(64))
                 challengeMessage['TargetInfoFields'] = ntlm.AV_PAIRS()
@@ -453,7 +455,7 @@ class HTTPRelayServer(Thread):
                 try:
                     authenticateMessage = ntlm.NTLMAuthChallengeResponse()
                     authenticateMessage.fromString(token)
-                    LOG.info("(HTTP): Parsed authenticate message, user: %s" % authenticateMessage['user_name'])
+                    LOG.info("(HTTP): Parsed authenticate message, user: %s, flags: %s" % (authenticateMessage['user_name'], hex(authenticateMessage['flags'])))
                 except Exception as e:
                     LOG.error("(HTTP): Exception parsing AUTHENTICATE message: %s" % str(e))
                     LOG.debug("(HTTP): Exception details:", exc_info=True)
