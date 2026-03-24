@@ -1,6 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
+# Copyright Fortra, LLC and its affiliated companies
 #
 # All rights reserved.
 #
@@ -24,7 +24,6 @@ from OpenSSL import SSL
 # Besides using this base class you need to define one global variable when
 # writing a plugin:
 PLUGIN_CLASS = "HTTPSSocksRelay"
-EOL = '\r\n'
 
 class HTTPSSocksRelay(SSLServerMixin, HTTPSocksRelay):
     PLUGIN_NAME = 'HTTPS Socks Plugin'
@@ -49,12 +48,10 @@ class HTTPSSocksRelay(SSLServerMixin, HTTPSocksRelay):
     def tunnelConnection(self):
         while True:
             try:
-                data = self.socksSocket.recv(self.packetSize)
+                data = self.recvFullRequest()
             except SSL.ZeroReturnError:
-                # The SSL connection was closed, return
+                # The SSL connection was closed
                 return
-            # Pass the request to the server
-            tosend = self.prepareRequest(data)
-            self.relaySocket.send(tosend)
-            # Send the response back to the client
-            self.transferResponse()
+            if not data:
+                return
+            self.proxyRequest(data)

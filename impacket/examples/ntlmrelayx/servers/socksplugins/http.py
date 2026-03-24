@@ -1,6 +1,6 @@
 # Impacket - Collection of Python classes for working with network protocols.
 #
-# Copyright Fortra, LLC and its affiliated companies 
+# Copyright Fortra, LLC and its affiliated companies
 #
 # All rights reserved.
 #
@@ -33,6 +33,7 @@ class HTTPSocksRelay(SocksRelay):
     def __init__(self, targetHost, targetPort, socksSocket, activeRelays):
         SocksRelay.__init__(self, targetHost, targetPort, socksSocket, activeRelays)
         self.packetSize = 8192
+        self.protocolClient = None
 
     @staticmethod
     def getProtocolPort():
@@ -41,30 +42,35 @@ class HTTPSocksRelay(SocksRelay):
     def initConnection(self):
         pass
 
+    @staticmethod
+    def normalizeUsername(username):
+        """Normalize to DOMAIN/user format (uppercased).
+        Accepts: DOMAIN/user, DOMAIN\\user, user@domain.fqdn
+        """
+        username = username.upper()
+        if '@' in username:
+            user, domain = username.split('@', 1)
+            return '%s/%s' % (domain.split('.')[0], user)
+        elif '\\' in username:
+            domain, user = username.split('\\', 1)
+            return '%s/%s' % (domain, user)
+        return username
+
     def skipAuthentication(self):
-        # See if the user provided authentication
-        data = self.socksSocket.recv(self.packetSize)
-        # Get headers from data
+        # Receive the initial HTTP request from the SOCKS client (e.g. curl)
+        data = self.recvFullRequest()
+        if not data:
+            return False
         headerDict = self.getHeaders(data)
         try:
             creds = headerDict['authorization']
             if 'Basic' not in creds:
                 raise KeyError()
-            basicAuth = base64.b64decode(creds[6:]).decode("ascii")
-            self.username = basicAuth.split(':')[0].upper()
-            if '@' in self.username:
-                # Workaround for clients which specify users with the full FQDN
-                # such as ruler
-                user, domain = self.username.split('@', 1)
-                # Currently we only use the first part of the FQDN
-                # this might break stuff on tools that do use an FQDN
-                # where the domain NETBIOS name is not equal to the part
-                # before the first .
-                self.username = '%s/%s' % (domain.split('.')[0], user)
+            basicAuth = base64.b64decode(creds[6:]).decode('ascii')
+            self.username = self.normalizeUsername(basicAuth.split(':')[0])
 
-            # Check if we have a connection for the user
+            # Check if we have a relay session for this user
             if self.username in self.activeRelays:
-                # Check the connection is not inUse
                 if self.activeRelays[self.username]['inUse'] is True:
                     LOG.error('HTTP: Connection for %s@%s(%s) is being used at the moment!' % (
                         self.username, self.targetHost, self.targetPort))
@@ -72,135 +78,150 @@ class HTTPSocksRelay(SocksRelay):
                 else:
                     LOG.info('HTTP: Proxying client session for %s@%s(%s)' % (
                         self.username, self.targetHost, self.targetPort))
-                    self.session = self.activeRelays[self.username]['protocolClient'].session
+                    self.protocolClient = self.activeRelays[self.username]['protocolClient']
+                    self.session = self.protocolClient.session
             else:
                 LOG.error('HTTP: No session for %s@%s(%s) available' % (
                     self.username, self.targetHost, self.targetPort))
                 return False
 
         except KeyError:
-            # User didn't provide authentication yet, prompt for it
+            # No auth provided - prompt for Basic auth so we can identify which relay session to use
             LOG.debug('No authentication provided, prompting for basic authentication')
-            reply = [b'HTTP/1.1 401 Unauthorized',b'WWW-Authenticate: Basic realm="ntlmrelayx - provide a DOMAIN/username"',b'Connection: close',b'',b'']
+            reply = [
+                b'HTTP/1.1 401 Unauthorized',
+                b'WWW-Authenticate: Basic realm="ntlmrelayx - provide DOMAIN/user or DOMAIN\\\\user"',
+                b'Connection: close',
+                b'', b''
+            ]
             self.socksSocket.send(EOL.join(reply))
             return False
 
-        # When we are here, we have a session
-        # Point our socket to the sock attribute of HTTPConnection
-        # (contained in the session), which contains the socket
-        self.relaySocket = self.session.sock
-        # Send the initial request to the server
-        tosend = self.prepareRequest(data)
-        self.relaySocket.send(tosend)
-        # Send the response back to the client
-        self.transferResponse()
+        # Proxy the initial request through the NTLM-authenticated relay session
+        self.proxyRequest(data)
         return True
 
+    def recvFullRequest(self):
+        """Receive a complete HTTP request (headers + body) from the SOCKS client."""
+        data = b''
+        while True:
+            chunk = self.socksSocket.recv(self.packetSize)
+            if not chunk:
+                return None
+            data += chunk
+            # Check if we have the full headers
+            headerEnd = data.find(EOL + EOL)
+            if headerEnd == -1:
+                continue
+            # Parse Content-Length to determine if we need more body data
+            headers = self.getHeaders(data)
+            try:
+                contentLength = int(headers['content-length'])
+            except (KeyError, ValueError):
+                # No body expected (GET, HEAD, etc.) or chunked - return what we have
+                break
+            bodyStart = headerEnd + 4
+            bodyReceived = len(data) - bodyStart
+            if bodyReceived >= contentLength:
+                break
+        return data
+
+    def parseRequest(self, data):
+        """Parse raw HTTP request bytes into method, path, headers, and body."""
+        headerEnd = data.find(EOL + EOL)
+        if headerEnd == -1:
+            headerEnd = len(data)
+            body = b''
+        else:
+            body = data[headerEnd + 4:]
+
+        lines = data[:headerEnd].split(EOL)
+        requestLine = lines[0].decode('ascii')
+        parts = requestLine.split(' ', 2)
+        method = parts[0]
+        path = parts[1] if len(parts) > 1 else '/'
+
+        headers = {}
+        for line in lines[1:]:
+            decoded = line.decode('ascii')
+            if ':' in decoded:
+                key, val = decoded.split(':', 1)
+                headers[key.strip()] = val.strip()
+
+        return method, path, headers, body
+
+    def proxyRequest(self, data):
+        """Proxy a single HTTP request through the NTLM-authenticated relay session.
+
+        Uses the HTTPConnection from the relay client's session, which already
+        completed the NTLM handshake. All requests on this connection inherit
+        the NTLM authentication transparently.
+        """
+        method, path, headers, body = self.parseRequest(data)
+
+        # Strip headers that interfere with the relay connection
+        proxyHeaders = {}
+        for key, val in headers.items():
+            lk = key.lower()
+            # Remove client-side auth - the relay session provides NTLM auth
+            if lk == 'authorization':
+                continue
+            # Keep the connection alive to preserve NTLM auth state
+            if lk == 'connection' and val.lower() == 'close':
+                proxyHeaders[key] = 'Keep-Alive'
+                continue
+            proxyHeaders[key] = val
+
+        # Forward the request through the authenticated HTTPConnection
+        self.session.request(method, path, body=body if body else None, headers=proxyHeaders)
+        res = self.session.getresponse()
+        resBody = res.read()
+
+        # Build and send the response back to the SOCKS client
+        rawResponse = self.buildResponse(res, resBody)
+        self.socksSocket.sendall(rawResponse)
+
+    def buildResponse(self, res, body):
+        """Reconstruct raw HTTP response bytes from an HTTPResponse and body.
+
+        Since we read the full body (including chunked decoding), we normalize
+        the response to use Content-Length for the client.
+        """
+        parts = []
+        parts.append(('HTTP/1.1 %d %s' % (res.status, res.reason)).encode('ascii'))
+
+        for hdr, val in res.getheaders():
+            lh = hdr.lower()
+            # Drop transfer-encoding and content-length; we set our own Content-Length
+            if lh in ('transfer-encoding', 'content-length'):
+                continue
+            parts.append(('%s: %s' % (hdr, val)).encode('ascii'))
+
+        parts.append(('Content-Length: %d' % len(body)).encode('ascii'))
+        return EOL.join(parts) + EOL + EOL + body
+
     def getHeaders(self, data):
-        # Get the headers from the request, ignore first "header"
-        # since this is the HTTP method, identifier, version
-        headerSize = data.find(EOL+EOL)
+        """Parse HTTP headers into a lowercase-keyed dict."""
+        headerSize = data.find(EOL + EOL)
+        if headerSize == -1:
+            headerSize = len(data)
         headers = data[:headerSize].split(EOL)[1:]
-        headers = [header.decode("ascii") for header in headers]
-        headerDict = {hdrKey.split(':')[0].lower():hdrKey.split(':', 1)[1][1:] for hdrKey in headers}
+        headers = [header.decode('ascii') for header in headers]
+        headerDict = {}
+        for hdr in headers:
+            if ':' in hdr:
+                key, val = hdr.split(':', 1)
+                headerDict[key.strip().lower()] = val.strip()
         return headerDict
 
-    def transferResponse(self):
-        data = self.relaySocket.recv(self.packetSize)
-        headerSize = data.find(EOL+EOL)
-        headers = self.getHeaders(data)
-        try:
-            bodySize = int(headers['content-length'])
-            readSize = len(data)
-            # Make sure we send the entire response, but don't keep it in memory
-            self.socksSocket.send(data)
-            while readSize < bodySize + headerSize + 4:
-                data = self.relaySocket.recv(self.packetSize)
-                readSize += len(data)
-                self.socksSocket.send(data)
-        except KeyError:
-            try:
-                if headers['transfer-encoding'] == 'chunked':
-                    # Chunked transfer-encoding, bah
-                    LOG.debug('Server sent chunked encoding - transferring')
-                    self.transferChunked(data, headers)
-                else:
-                    # No body in the response, send as-is
-                    self.socksSocket.send(data)
-            except KeyError:
-                # No body in the response, send as-is
-                self.socksSocket.send(data)
-
-    def transferChunked(self, data, headers):
-        headerSize = data.find(EOL+EOL)
-
-        self.socksSocket.send(data[:headerSize + 4])
-
-        body = data[headerSize + 4:]
-        # Size of the chunk
-        datasize = int(body[:body.find(EOL)], 16)
-        while datasize > 0:
-            # Size of the total body
-            bodySize = body.find(EOL) + 2 + datasize + 2
-            readSize = len(body)
-            # Make sure we send the entire response, but don't keep it in memory
-            self.socksSocket.send(body)
-            while readSize < bodySize:
-                maxReadSize = bodySize - readSize
-                body = self.relaySocket.recv(min(self.packetSize, maxReadSize))
-                readSize += len(body)
-                self.socksSocket.send(body)
-            body = self.relaySocket.recv(self.packetSize)
-            datasize = int(body[:body.find(EOL)], 16)
-        LOG.debug('Last chunk received - exiting chunked transfer')
-        self.socksSocket.send(body)
-
-    def prepareRequest(self, data):
-        # Parse the HTTP data, removing headers that break stuff
-        response = []
-        for part in data.split(EOL):
-            # This means end of headers, stop parsing here
-            if part == '':
-                break
-            # Remove the Basic authentication header
-            if b'authorization' in part.lower():
-                continue
-            # Don't close the connection
-            if b'connection: close' in part.lower():
-                response.append('Connection: Keep-Alive')
-                continue
-            # If we are here it means we want to keep the header
-            response.append(part)
-        # Append the body
-        response.append(b'')
-        response.append(data.split(EOL+EOL)[1])
-        senddata = EOL.join(response)
-
-        # Check if the body is larger than 1 packet
-        headerSize = data.find(EOL+EOL)
-        headers = self.getHeaders(data)
-        try:
-            bodySize = int(headers['content-length'])
-            readSize = len(data)
-            while readSize < bodySize + headerSize + 4:
-                data = self.socksSocket.recv(self.packetSize)
-                readSize += len(data)
-                senddata += data
-        except KeyError:
-            # No body, could be a simple GET or a POST without body
-            # no need to check if we already have the full packet
-            pass
-        return senddata
-
-
     def tunnelConnection(self):
+        """Handle subsequent requests after initial authentication.
+
+        Each request from the SOCKS client is proxied through the
+        NTLM-authenticated relay session.
+        """
         while True:
-            data = self.socksSocket.recv(self.packetSize)
-            # If this returns with an empty string, it means the socket was closed
-            if data == '':
+            data = self.recvFullRequest()
+            if not data:
                 return
-            # Pass the request to the server
-            tosend = self.prepareRequest(data)
-            self.relaySocket.send(tosend)
-            # Send the response back to the client
-            self.transferResponse()
+            self.proxyRequest(data)
